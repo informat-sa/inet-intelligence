@@ -1,0 +1,49 @@
+# Dependencies
+node_modules/
+*/node_modules/
+
+# Build outputs
+dist/
+.next/
+out/
+
+# Environment files (NEVER commit secrets)
+.env
+.env.local
+.env.*.local
+api/.env
+
+# Keep example files
+!.env.example
+!api/.env.example
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+.DS_Store?
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Next.js
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# NestJS
+dist/
+
+# Coverage
+coverage/
+
+# Large KB data files (local only — too large for git)
+docs/_full_attributes.json
+docs/_language_objects.json
