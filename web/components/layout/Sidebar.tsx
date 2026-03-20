@@ -1,30 +1,56 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Sparkles, Plus, MessageSquare, History, LogOut, ChevronLeft,
-  ChevronRight, Trash2, Search, Settings, TrendingUp, Package,
+  ChevronRight, Trash2, Search, TrendingUp, Package,
   CreditCard, Users, BookOpen, FileText, Truck, ShoppingCart,
-  Building, Ship,
+  Building, Ship, Star, Shield, Loader2,
+  Landmark, Receipt, FileSearch, ShoppingBag,
+  Boxes, Settings, Wallet, Wheat, Headphones,
 } from "lucide-react";
 import { cn, formatRelativeTime, ERP_MODULES } from "@/lib/utils";
 import { useChatStore } from "@/store/chat";
+import { useFavoritesStore } from "@/store/favorites";
+import { getFavorites } from "@/lib/api";
 
 const MODULE_ICONS: Record<string, React.ElementType> = {
   TrendingUp, Package, CreditCard, Users, BookOpen, FileText,
   Truck, ShoppingCart, Building, Ship,
+  Landmark, Receipt, FileSearch, ShoppingBag,
+  Boxes, Settings, Wallet, Wheat, Headphones,
 };
 
 export function Sidebar() {
   const router = useRouter();
   const {
     user, conversations, activeConversationId, isSidebarOpen,
+    activeModule, setActiveModule,
     toggleSidebar, createConversation, setActiveConversation, deleteConversation,
   } = useChatStore();
 
-  const [search, setSearch] = useState("");
+  const { favorites, setFavorites } = useFavoritesStore();
+
+  const [search, setSearch]           = useState("");
   const [showModules, setShowModules] = useState(false);
+  const [showFavs, setShowFavs]       = useState(false);
+
+  const isAdmin      = user?.role === "admin" || user?.role === "super_admin";
+  const allowedPrefixes = user?.modules ?? [];
+
+  // Filter ERP_MODULES to only show what the user can access
+  const visibleModules = allowedPrefixes.length > 0
+    ? ERP_MODULES.filter((m) => allowedPrefixes.includes(m.prefix))
+    : ERP_MODULES;
+
+  // Load favorites from API on mount
+  useEffect(() => {
+    if (!user) return;
+    getFavorites()
+      .then(setFavorites)
+      .catch(() => { /* silent fail */ });
+  }, [user, setFavorites]);
 
   const filtered = conversations.filter((c) =>
     c.title.toLowerCase().includes(search.toLowerCase())
@@ -38,6 +64,7 @@ export function Sidebar() {
 
   function handleLogout() {
     localStorage.removeItem("inet_token");
+    useChatStore.setState({ user: null });
     router.push("/login");
   }
 
@@ -153,7 +180,53 @@ export function Sidebar() {
               )}
             </div>
 
-            {/* Modules section */}
+            {/* ── Favorites section ──────────────────────────────────── */}
+            {favorites.length > 0 && (
+              <div className="px-3 pb-1 border-t border-slate-100 dark:border-slate-800 pt-2">
+                <button
+                  onClick={() => setShowFavs(!showFavs)}
+                  className="sidebar-item w-full justify-between"
+                >
+                  <div className="flex items-center gap-3">
+                    <Star className="w-4 h-4 opacity-60 text-amber-500" />
+                    <span>Favoritos</span>
+                    <span className="text-[10px] bg-amber-100 dark:bg-amber-500/20 text-amber-600
+                                     dark:text-amber-400 px-1.5 py-0.5 rounded-full font-medium">
+                      {favorites.length}
+                    </span>
+                  </div>
+                  <ChevronRight className={cn("w-3 h-3 transition-transform", showFavs && "rotate-90")} />
+                </button>
+                <AnimatePresence>
+                  {showFavs && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: "auto", opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      className="overflow-hidden"
+                    >
+                      <div className="pl-2 pt-1 space-y-0.5">
+                        {favorites.map((fav) => (
+                          <button
+                            key={fav.id}
+                            onClick={() => {
+                              // Navigate to dashboard and trigger the question
+                              router.push(`/dashboard?q=${encodeURIComponent(fav.question)}`);
+                            }}
+                            className="sidebar-item w-full text-left text-xs"
+                          >
+                            <Star className="w-3 h-3 text-amber-500 flex-shrink-0" />
+                            <span className="truncate flex-1">{fav.title}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            )}
+
+            {/* ── Modules section ────────────────────────────────────── */}
             <div className="px-3 pb-2 border-t border-slate-100 dark:border-slate-800 pt-2">
               <button
                 onClick={() => setShowModules(!showModules)}
@@ -162,6 +235,10 @@ export function Sidebar() {
                 <div className="flex items-center gap-3">
                   <History className="w-4 h-4 opacity-60" />
                   <span>Módulos disponibles</span>
+                  <span className="text-[10px] bg-slate-100 dark:bg-slate-700 text-slate-500
+                                   dark:text-slate-400 px-1.5 py-0.5 rounded-full font-medium">
+                    {visibleModules.length}
+                  </span>
                 </div>
                 <ChevronRight className={cn("w-3 h-3 transition-transform", showModules && "rotate-90")} />
               </button>
@@ -173,17 +250,40 @@ export function Sidebar() {
                     exit={{ height: 0, opacity: 0 }}
                     className="overflow-hidden"
                   >
-                    <div className="pl-2 pt-1 space-y-0.5">
-                      {ERP_MODULES.map((mod) => {
+                    {/* max-h + overflow-y-auto → scrolleable cuando hay muchos módulos */}
+                    <div className="pl-2 pt-1 space-y-0.5 max-h-56 overflow-y-auto
+                                    scrollbar-thin scrollbar-thumb-slate-200 dark:scrollbar-thumb-slate-700">
+                      {visibleModules.map((mod) => {
                         const Icon = MODULE_ICONS[mod.icon] ?? MessageSquare;
+                        const isActive = activeModule === mod.prefix;
                         return (
-                          <div key={mod.prefix} className="sidebar-item text-xs">
-                            <Icon className="w-3.5 h-3.5" style={{ color: mod.color }} />
-                            <span>{mod.name}</span>
-                            <span className="ml-auto text-[10px] text-slate-400">
-                              {mod.tableCount} tablas
-                            </span>
-                          </div>
+                          <button
+                            key={mod.prefix}
+                            onClick={() => {
+                              setActiveModule(isActive ? null : mod.prefix);
+                              router.push("/dashboard");
+                            }}
+                            className={cn(
+                              "sidebar-item text-xs w-full text-left transition-all",
+                              isActive
+                                ? "bg-brand-blue/10 text-brand-blue dark:text-brand-mid font-semibold"
+                                : "group/mod"
+                            )}
+                          >
+                            <Icon className="w-3.5 h-3.5 flex-shrink-0" style={{ color: mod.color }} />
+                            <span className="flex-1 truncate">{mod.name}</span>
+                            {isActive ? (
+                              <span className="text-[9px] bg-brand-blue text-white px-1.5 py-0.5
+                                               rounded-full font-bold flex-shrink-0">
+                                ACTIVO
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-slate-400 flex-shrink-0
+                                               group-hover/mod:opacity-0 transition-opacity">
+                                {mod.tableCount}t
+                              </span>
+                            )}
+                          </button>
                         );
                       })}
                     </div>
@@ -192,7 +292,21 @@ export function Sidebar() {
               </AnimatePresence>
             </div>
 
-            {/* User + logout */}
+            {/* ── Admin link (admin/super_admin only) ──────────────── */}
+            {isAdmin && (
+              <div className="px-3 pb-2">
+                <button
+                  onClick={() => router.push("/admin")}
+                  className="sidebar-item w-full text-brand-blue dark:text-brand-mid
+                             hover:bg-brand-blue/8"
+                >
+                  <Shield className="w-4 h-4" />
+                  <span className="font-medium">Panel de administración</span>
+                </button>
+              </div>
+            )}
+
+            {/* ── User + logout ─────────────────────────────────────── */}
             <div className="p-3 border-t border-slate-100 dark:border-slate-800">
               <div className="flex items-center gap-3 px-3 py-2">
                 <div className="w-8 h-8 rounded-full bg-gradient-to-br from-brand-blue to-brand-navy

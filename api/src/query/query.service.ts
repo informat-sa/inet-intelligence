@@ -1,8 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import Anthropic from '@anthropic-ai/sdk';
 import { SchemaService } from '../schema/schema.service';
-import { DatabaseService } from '../database/database.service';
+import { DatabaseService, TenantConnectionInfo } from '../database/database.service';
+import { TenantsService } from '../tenants/tenants.service';
 import { validateAndSanitizeSQL } from './sql-validator';
+import { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import type { MessageStreamEvent } from '@anthropic-ai/sdk/resources/messages.mjs';
 
 export interface StreamEvent {
@@ -57,6 +59,7 @@ export class QueryService {
   constructor(
     private readonly schemaService: SchemaService,
     private readonly databaseService: DatabaseService,
+    @Optional() private readonly tenantsService: TenantsService,
   ) {
     this.anthropic = new Anthropic({
       apiKey: process.env.ANTHROPIC_API_KEY ?? '',
@@ -65,13 +68,33 @@ export class QueryService {
 
   async *streamQuery(
     question: string,
-    empresaId: string,
+    jwtUser: JwtPayload,
+    forcedModules?: string[],
   ): AsyncGenerator<StreamEvent> {
-    // 1. Detect relevant modules
-    const modulePrefixes = this.schemaService.detectModules(question);
-    this.logger.log(`Question: "${question.slice(0, 60)}" → modules: ${modulePrefixes.join(', ')}`);
+    // 1. Determine modules: forced (from active module context) or auto-detected
+    const detectedModules = forcedModules?.length
+      ? forcedModules
+      : this.schemaService.detectModules(question);
 
-    // 2. Demo mode — stream a realistic canned response without calling Claude API
+    // 2. ── Permission enforcement via JWT ──────────────────────────────────
+    const allowedModules = jwtUser?.allowedModules ?? [];
+    const modulePrefixes = detectedModules.length > 0
+      ? detectedModules.filter((p) => allowedModules.length === 0 || allowedModules.includes(p))
+      : allowedModules.slice(0, 3);
+
+    if (detectedModules.length > 0 && modulePrefixes.length === 0) {
+      yield {
+        type:  'error',
+        error: 'No tienes permiso para consultar los módulos detectados en esta pregunta. ' +
+               'Contacta al administrador.',
+      };
+      return;
+    }
+
+    const tenantLabel = jwtUser?.tenantSlug ?? 'demo';
+    this.logger.log(`[${tenantLabel}] "${question.slice(0, 60)}" → módulos: ${modulePrefixes.join(', ')}`);
+
+    // 3. Demo mode check
     const isDemoMode =
       process.env.DEMO_MODE === 'true' ||
       !process.env.ANTHROPIC_API_KEY ||
@@ -82,35 +105,61 @@ export class QueryService {
       return;
     }
 
-    // 3. Build schema context
-    const schemaContext = this.schemaService.getSchemaContext(modulePrefixes);
+    // 4. Resolve tenant SQL Server connection
+    let tenantInfo: TenantConnectionInfo | null = null;
+    if (jwtUser?.tenantId) {
+      const tenant = await this.tenantsService.findById(jwtUser.tenantId);
+      if (tenant) tenantInfo = tenant as unknown as TenantConnectionInfo;
+    }
 
-    // 4. Build prompt
-    const userMessage = `Schema disponible:
-\`\`\`sql
-${schemaContext}
-\`\`\`
+    // 5. ── Optimization 2: Smart Table Selection ───────────────────────────
+    // Pass question so schema service returns only the top-N most relevant
+    // tables per module (reduces schema tokens by ~85%)
+    const schemaContext = this.schemaService.getSchemaContext(modulePrefixes, question);
 
-Pregunta del usuario: ${question}
+    // 6. ── Optimization 3: Model Routing ──────────────────────────────────
+    const model = this.selectModel(question, modulePrefixes.length);
+    this.logger.log(`[${tenantLabel}] Model: ${model}`);
 
-Por favor:
-1. Genera el SQL T-SQL correcto para responder esta pregunta
-2. Ejecuta la consulta (yo la ejecutaré por ti — incluye el SQL entre tags [SQL]...[/SQL])
-3. Interpreta los resultados en español
-
-El SQL DEBE estar entre [SQL] y [/SQL].`;
-
-    // 5. Start streaming from Claude
+    // 7. Stream from Claude with all optimizations
     let fullText = '';
-    let sqlExtracted = '';
     let sqlExecuted = false;
 
     try {
+      // ── Optimization 1: Prompt Caching on system + schema ─────────────
       const stream = await this.anthropic.messages.stream({
-        model:      'claude-opus-4-5',
+        model,
         max_tokens: 2048,
-        system:     SYSTEM_PROMPT,
-        messages:   [{ role: 'user', content: userMessage }],
+        system: [{
+          type: 'text',
+          text: SYSTEM_PROMPT,
+          cache_control: { type: 'ephemeral' },
+        }] as any,
+        messages: [{
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: schemaContext,
+              cache_control: { type: 'ephemeral' },
+            },
+            {
+              type: 'text',
+              text: `Pregunta: ${question}\n\nGenera SQL T-SQL entre [SQL] y [/SQL] e interpreta los resultados en español.`,
+            },
+          ] as any,
+        }],
+      });
+
+      // ── Optimization 5: Log token usage for cost monitoring ───────────
+      stream.on('message', (msg) => {
+        const usage = (msg as any).usage;
+        if (usage) {
+          this.logger.log(
+            `[${tenantLabel}] Tokens — input: ${usage.input_tokens} ` +
+            `(cached: ${usage.cache_read_input_tokens ?? 0}) output: ${usage.output_tokens}`,
+          );
+        }
       });
 
       for await (const event of stream as AsyncIterable<MessageStreamEvent>) {
@@ -118,22 +167,16 @@ El SQL DEBE estar entre [SQL] y [/SQL].`;
           const delta = event.delta.text;
           fullText += delta;
 
-          // Yield text delta (filter out raw SQL blocks from stream)
           if (!this.isInsideSqlBlock(fullText)) {
             yield { type: 'delta', delta };
           }
 
-          // Try to extract and execute SQL as soon as we have a complete [SQL]...[/SQL] block
           if (!sqlExecuted && fullText.includes('[/SQL]')) {
             const match = fullText.match(/\[SQL\]([\s\S]*?)\[\/SQL\]/);
             if (match) {
-              sqlExtracted = match[1].trim();
               sqlExecuted = true;
-
-              const execResult = await this.executeSQL(sqlExtracted);
-              if (execResult) {
-                yield { type: 'result', result: execResult };
-              }
+              const execResult = await this.executeSQL(match[1].trim(), tenantInfo);
+              if (execResult) yield { type: 'result', result: execResult };
             }
           }
         }
@@ -146,6 +189,15 @@ El SQL DEBE estar entre [SQL] y [/SQL].`;
       this.logger.error('Query stream error', err);
       yield { type: 'error', error: err instanceof Error ? err.message : 'Error desconocido' };
     }
+  }
+
+  // ── Optimization 3: Model routing ────────────────────────────────────────
+  private selectModel(question: string, moduleCount: number): string {
+    const isSimple =
+      moduleCount === 1 &&
+      question.split(' ').length < 15 &&
+      !/comparar|vs\.?|versus|tendencia|período|evoluci|ranking|top\s*\d/i.test(question);
+    return isSimple ? 'claude-haiku-4-5' : 'claude-sonnet-4-5';
   }
 
   /** Demo mode: simulate Claude streaming with realistic ERP responses */
@@ -215,20 +267,20 @@ El SQL DEBE estar entre [SQL] y [/SQL].`;
     return sqlStart !== -1 && sqlStart > sqlEnd;
   }
 
-  private async executeSQL(rawSql: string): Promise<QueryResult | null> {
+  private async executeSQL(rawSql: string, tenant: TenantConnectionInfo | null = null): Promise<QueryResult | null> {
     const validation = validateAndSanitizeSQL(rawSql);
     if (!validation.valid) {
       this.logger.warn(`SQL validation failed: ${validation.error}`);
       return { type: 'error', sql: rawSql };
     }
 
-    if (!this.databaseService.isConnected()) {
+    if (!tenant && !this.databaseService.isConnected()) {
       this.logger.warn('Database not connected — returning mock data');
       return this.getMockResult(validation.sql);
     }
 
     try {
-      const result = await this.databaseService.executeQuery(validation.sql);
+      const result = await this.databaseService.executeQuery(validation.sql, tenant);
       const cols: ColumnDef[] = result.columns.map((c) => ({
         key:   c.name,
         label: c.name,

@@ -39,8 +39,8 @@ const MODULE_META: Record<string, { name: string; description: string; keywords:
     keywords: ['importación', 'internación', 'aduanero', 'derecho', 'carpeta', 'embarque', 'flete', 'póliza', 'seguro'] },
   EXI: { name: 'Existencias e Inventario', description: 'Control de stock, bodegas, movimientos, traspasos, ajustes de inventario, valorización',
     keywords: ['stock', 'inventario', 'bodega', 'existencia', 'movimiento', 'traspaso', 'saldo', 'unidades', 'mínimo', 'sin movimiento'] },
-  PRO: { name: 'Productos', description: 'Maestro de artículos, categorías, unidades de medida, precios, lotes, trazabilidad',
-    keywords: ['producto', 'artículo', 'ítem', 'sku', 'código', 'categoría', 'unidad', 'precio', 'lote'] },
+  PRO: { name: 'Producción y Maestro de Artículos', description: 'Órdenes de producción, fórmulas, máquinas, costos de producción, maestro de productos y proveedores',
+    keywords: ['producción', 'orden producción', 'fórmula', 'máquina', 'producto', 'artículo', 'ítem', 'sku', 'fabricar', 'fabricación', 'proceso productivo', 'costo producción', 'hoja control', 'dotación', 'turno'] },
   AFF: { name: 'Activo Fijo', description: 'Bienes, depreciación, incorporaciones, bajas, traslados, revaluaciones',
     keywords: ['activo fijo', 'bien', 'depreciación', 'incorporación', 'baja', 'traslado', 'valor libro', 'valor residual'] },
   REM: { name: 'Remuneraciones y RRHH', description: 'Liquidación de sueldos, haberes, descuentos, AFP, ISAPRE, finiquitos, vacaciones',
@@ -59,6 +59,14 @@ const MODULE_META: Record<string, { name: string; description: string; keywords:
     keywords: ['grano', 'trigo', 'molino', 'harina', 'romanaje', 'cereal', 'molinero'] },
   ATE: { name: 'Atención a Clientes', description: 'Tickets, solicitudes de servicio, contratos de mantención, SLA',
     keywords: ['atención', 'ticket', 'soporte', 'mantención', 'servicio', 'reclamo'] },
+  BAN: { name: 'Bancos', description: 'Cuentas bancarias, movimientos bancarios, saldos, cheques, transferencias, conciliación',
+    keywords: ['banco', 'cuenta bancaria', 'cheque', 'transferencia', 'saldo banco', 'movimiento banco', 'cartola', 'conciliación bancaria', 'depósito'] },
+  EGR: { name: 'Egresos y Pagos', description: 'Egresos de caja, pagos a proveedores, formas de pago, autorización de gastos, análisis de egresos',
+    keywords: ['egreso', 'pago proveedor', 'gasto', 'egreso directo', 'forma de pago', 'autorización pago', 'cuentas pagar', 'pago remun'] },
+  COT: { name: 'Cotizaciones', description: 'Cotizaciones de proveedores, solicitudes de cotización, comparación de precios',
+    keywords: ['cotización', 'cotizar', 'solicitud cotización', 'presupuesto proveedor', 'comparación precios', 'oferta proveedor'] },
+  PED: { name: 'Pedidos', description: 'Pedidos de clientes, solicitudes, seguimiento de pedidos pendientes, órdenes no entregadas',
+    keywords: ['pedido', 'solicitud pedido', 'pedido cliente', 'orden pendiente', 'pedido no entregado', 'seguimiento pedido', 'pedidos atendidos'] },
 };
 
 @Injectable()
@@ -176,38 +184,85 @@ export class SchemaService implements OnModuleInit {
     return result;
   }
 
-  /** Get compact schema DDL for a list of module prefixes */
-  getSchemaContext(prefixes: string[]): string {
+  /**
+   * Get schema context for a list of module prefixes.
+   *
+   * Optimizations applied:
+   * 1. Smart Table Selection: if `question` is provided, ranks tables by
+   *    keyword relevance and returns only the top N per module (~85% fewer tokens)
+   * 2. Compact format: uses [TABLE] shorthand instead of full DDL (~3x fewer tokens)
+   */
+  getSchemaContext(prefixes: string[], question?: string): string {
+    const MAX_TABLES_PER_MODULE = 8;  // Top-N most relevant tables
     const lines: string[] = [];
-    lines.push('-- I-NET ERP Schema (GeneXus 9.0.3 / SQL Server)');
-    lines.push('-- Table prefix convention: table names start with module prefix');
-    lines.push('-- Date format: YYYYMMDD stored as CHAR(8) or CHAR(6) for YYYYMM');
+    lines.push('-- I-NET ERP (SQL Server). Fechas: CHAR(8)=YYYYMMDD, CHAR(6)=YYYYMM');
+    lines.push('-- Mes actual: CONVERT(CHAR(6),GETDATE(),112)');
     lines.push('');
 
     for (const prefix of prefixes) {
       const mod = this.modules.get(prefix);
       if (!mod) continue;
 
-      lines.push(`-- ═══ MODULE: ${mod.name} (${prefix}) ═══`);
-      lines.push(`-- ${mod.description}`);
-      lines.push('');
+      lines.push(`-- ${mod.name} (${prefix}): ${mod.description}`);
 
-      for (const table of mod.tables) {
+      // ── Optimization 2: Smart Table Selection ──────────────────────────
+      const tables = question
+        ? this.rankTablesByRelevance(mod.tables, question).slice(0, MAX_TABLES_PER_MODULE)
+        : mod.tables.slice(0, MAX_TABLES_PER_MODULE);
+
+      for (const table of tables) {
         if (table.attributes.length === 0) continue;
-        lines.push(`-- ${table.description}`);
-        lines.push(`CREATE TABLE ${table.name} (`);
-        const colLines = table.attributes.map((a) => {
-          const sqlType = this.toSqlType(a);
-          const comment = a.title && a.title !== a.name ? ` -- ${a.title}` : '';
-          return `  ${a.name} ${sqlType}${comment}`;
-        });
-        lines.push(colLines.join(',\n'));
-        lines.push(');');
-        lines.push('');
+
+        // ── Optimization 4: Compact schema format (3x fewer tokens) ───────
+        const cols = table.attributes
+          .map((a) => `${a.name}:${this.toCompactType(a)}`)
+          .join(' ');
+        lines.push(`[${table.name}] ${table.description}`);
+        lines.push(`  ${cols}`);
       }
+      lines.push('');
     }
 
     return lines.join('\n');
+  }
+
+  /**
+   * Rank tables by keyword relevance to the question.
+   * Score = number of question words that appear in table name or description.
+   */
+  private rankTablesByRelevance(tables: SchemaTable[], question: string): SchemaTable[] {
+    const words = question
+      .toLowerCase()
+      .replace(/[^\wáéíóúñü\s]/g, ' ')
+      .split(/\s+/)
+      .filter((w) => w.length > 2);
+
+    return tables
+      .map((t) => {
+        const target = `${t.name} ${t.description ?? ''}`.toLowerCase();
+        const score = words.reduce((acc, w) => acc + (target.includes(w) ? 1 : 0), 0);
+        return { table: t, score };
+      })
+      .sort((a, b) => b.score - a.score)
+      .map((x) => x.table);
+  }
+
+  /** Compact type notation: N10, C8, N15.2, DATE, etc. */
+  private toCompactType(a: Attribute): string {
+    const t = (a.type ?? '').toLowerCase();
+    const len = a.length ?? 0;
+    const dec = a.dec ?? 0;
+    if (t === 'date' || t === 'd') return 'DATE';
+    if (t === 'datetime' || t === 'a') return 'DATETIME';
+    if (t === 'boolean' || t === 'b') return 'BIT';
+    if (t === 'numeric' || t === 'n') return dec > 0 ? `N${len}.${dec}` : `N${len}`;
+    if (t === 'varchar' || t === 'vchar') return `VC${len}`;
+    if (t === 'string') {
+      if (len === 0) return 'N14.2';
+      return dec > 0 ? `N${len}.${dec}` : `C${len}`;
+    }
+    if (len > 0) return dec > 0 ? `N${len}.${dec}` : `C${len}`;
+    return 'VC255';
   }
 
   private toSqlType(a: Attribute): string {

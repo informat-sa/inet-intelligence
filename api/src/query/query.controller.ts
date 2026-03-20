@@ -1,12 +1,15 @@
 import { Controller, Post, Body, Res, Req, Logger } from '@nestjs/common';
 import type { Response, Request } from 'express';
-import { IsString, IsOptional } from 'class-validator';
+import { IsString, IsOptional, IsArray } from 'class-validator';
 import { QueryService } from './query.service';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 
 class QueryDto {
   @IsString() question: string;
-  @IsString() empresaId: string;
   @IsOptional() @IsString() conversationId?: string;
+  /** When set, bypass auto-detection and use exactly these module prefixes */
+  @IsOptional() @IsArray() forcedModules?: string[];
 }
 
 @Controller('query')
@@ -16,10 +19,16 @@ export class QueryController {
   constructor(private readonly queryService: QueryService) {}
 
   @Post('stream')
-  async streamQuery(@Body() dto: QueryDto, @Res() res: Response, @Req() req: Request) {
-    this.logger.log(`[${dto.empresaId}] "${dto.question.slice(0, 80)}"`);
+  async streamQuery(
+    @Body() dto: QueryDto,
+    @CurrentUser() jwtUser: JwtPayload,
+    @Res() res: Response,
+    @Req() req: Request,
+  ) {
+    const tenantLabel = jwtUser?.tenantSlug ?? 'demo';
+    this.logger.log(`[${tenantLabel}][${jwtUser?.email ?? 'anon'}] "${dto.question.slice(0, 80)}"`);
 
-    // Mirror the request origin so SSE works regardless of which port the frontend is on
+    // Mirror request origin for SSE to work across ports
     const origin = req.headers.origin as string | undefined;
     const allowedOrigin =
       origin && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
@@ -33,7 +42,7 @@ export class QueryController {
     res.flushHeaders();
 
     try {
-      const stream = this.queryService.streamQuery(dto.question, dto.empresaId);
+      const stream = this.queryService.streamQuery(dto.question, jwtUser, dto.forcedModules);
 
       for await (const event of stream) {
         res.write(`data: ${JSON.stringify(event)}\n\n`);
@@ -41,7 +50,7 @@ export class QueryController {
       }
     } catch (err) {
       this.logger.error('Stream error', err);
-      res.write(`data: ${JSON.stringify({ type: 'error', error: 'Internal server error' })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'error', error: 'Error interno del servidor' })}\n\n`);
     } finally {
       res.end();
     }

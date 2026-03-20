@@ -137,4 +137,85 @@ export const ERP_MODULES: ERP_Module[] = [
       "¿Cuál es la ruta con más entregas?",
     ],
   },
+  {
+    prefix: "BAN", name: "Bancos", description: "Cuentas bancarias y movimientos",
+    icon: "Landmark", color: "#0369A1", tableCount: 4, attributeCount: 28,
+    exampleQuestions: [
+      "¿Cuál es el saldo de mis cuentas bancarias hoy?",
+      "¿Qué cheques están pendientes de cobro?",
+      "¿Cuántos depósitos recibí esta semana?",
+    ],
+  },
+  {
+    prefix: "EGR", name: "Egresos", description: "Pagos a proveedores y egresos",
+    icon: "Receipt", color: "#DC2626", tableCount: 11, attributeCount: 67,
+    exampleQuestions: [
+      "¿Cuánto pagué a proveedores este mes?",
+      "¿Qué egresos están pendientes de autorización?",
+      "¿Cuál fue el total de gastos por forma de pago?",
+    ],
+  },
+  {
+    prefix: "COT", name: "Cotizaciones", description: "Cotizaciones de proveedores",
+    icon: "FileSearch", color: "#7C3AED", tableCount: 1, attributeCount: 1,
+    exampleQuestions: [
+      "¿Qué cotizaciones de proveedores están vigentes?",
+      "¿Cuál es la cotización más barata para este artículo?",
+      "¿Cuántas cotizaciones recibí este mes?",
+    ],
+  },
+  {
+    prefix: "PED", name: "Pedidos", description: "Pedidos y órdenes de clientes",
+    icon: "ShoppingBag", color: "#059669", tableCount: 3, attributeCount: 64,
+    exampleQuestions: [
+      "¿Qué pedidos están pendientes de entrega?",
+      "¿Cuántos pedidos no atendidos tengo hoy?",
+      "¿Qué cliente tiene más pedidos pendientes?",
+    ],
+  },
+  {
+    prefix: "PRO", name: "Producción", description: "Órdenes de producción, fórmulas y maestro de artículos",
+    icon: "Boxes", color: "#0891B2", tableCount: 55, attributeCount: 641,
+    exampleQuestions: [
+      "¿Qué órdenes de producción están abiertas hoy?",
+      "¿Cuánto costó la producción este mes?",
+      "¿Cuáles son los productos más fabricados en el trimestre?",
+    ],
+  },
+  {
+    prefix: "FIN", name: "Finanzas", description: "Líneas de crédito, condiciones financieras y pago",
+    icon: "Wallet", color: "#047857", tableCount: 9, attributeCount: 199,
+    exampleQuestions: [
+      "¿Cuáles son las líneas de crédito disponibles?",
+      "¿Qué créditos otorgados están vigentes?",
+      "¿Cuáles son las condiciones de pago activas?",
+    ],
+  },
+  {
+    prefix: "ATE", name: "Atención Clientes", description: "Atención, ofertas y servicio al cliente",
+    icon: "Headphones", color: "#DB2777", tableCount: 19, attributeCount: 346,
+    exampleQuestions: [
+      "¿Qué clientes tienen atenciones pendientes?",
+      "¿Cuáles son los productos en oferta hoy?",
+      "¿Cuántas atenciones registré esta semana?",
+    ],
+  },
+  {
+    prefix: "PAR", name: "Parámetros", description: "Configuración y tablas maestras del sistema",
+    icon: "Settings", color: "#64748B", tableCount: 45, attributeCount: 162,
+    exampleQuestions: [
+      "¿Cuáles son las sucursales configuradas en el sistema?",
+      "¿Qué monedas tiene habilitadas el sistema?",
+      "¿Cuáles son los parámetros de aprobación de documentos?",
+    ],
+  },
+  {
+    prefix: "GAN", name: "Granos (Molinero)", description: "Módulo vertical para industria molinera y granos",
+    icon: "Wheat", color: "#92400E", tableCount: 14, attributeCount: 1,
+    exampleQuestions: [
+      "¿Cuáles son los lotes de materia prima disponibles?",
+      "¿Qué auditorías de producción están registradas?",
+      "¿Cuántos procesos de molienda hay activos?",
+    ],
+  },
 ];

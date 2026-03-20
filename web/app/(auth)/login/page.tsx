@@ -5,6 +5,8 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Eye, EyeOff, Sparkles, TrendingUp, Package, CreditCard, Users, Building2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useChatStore } from "@/store/chat";
+import { login } from "@/lib/api";
+import type { User } from "@/types";
 
 const DEMO_MODULES = [
   { icon: TrendingUp, label: "Ventas", color: "text-sky-500" },
@@ -24,7 +26,7 @@ const DEMO_QUESTIONS = [
 
 export default function LoginPage() {
   const router = useRouter();
-  const setUser = useChatStore((s) => s.setUser);
+  const { setUser, setAccessibleTenants } = useChatStore();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPass, setShowPass] = useState(false);
@@ -43,25 +45,39 @@ export default function LoginPage() {
     setError("");
     setLoading(true);
     try {
-      // Demo login — replace with real API call
-      await new Promise((r) => setTimeout(r, 800));
-      if (email && password) {
-        setUser({
-          id: "u1",
-          name: email.split("@")[0].replace(/\./g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
-          email,
-          empresa: "Empresa Demo SpA",
-          empresaId: "EMP001",
-          role: "admin",
-          modules: [],
-        });
-        localStorage.setItem("inet_token", "demo_token");
-        router.push("/dashboard");
+      const { access_token, user: payload, accessibleTenants } = await login(email, password);
+      const p = payload as {
+        sub: string; email: string; role: string;
+        tenantId: string | null; tenantSlug: string | null; tenantName: string | null;
+        allowedModules: string[]; name?: string; empresa?: string; modules?: string[];
+      };
+
+      const user: User = {
+        id:         p.sub,
+        name:       p.name ?? email.split("@")[0],
+        email:      p.email,
+        empresa:    p.empresa ?? p.tenantName ?? "I-NET Intelligence",
+        tenantId:   p.tenantId,
+        tenantSlug: p.tenantSlug,
+        role:       p.role as User["role"],
+        modules:    p.modules ?? p.allowedModules ?? [],
+      };
+
+      localStorage.setItem("inet_token", access_token);
+      setUser(user);
+      setAccessibleTenants(accessibleTenants ?? []);
+
+      // If user has access to multiple companies → show selector
+      if ((accessibleTenants ?? []).length > 1) {
+        router.push("/select-company");
       } else {
-        setError("Ingresa tu correo y contraseña.");
+        router.push("/dashboard");
       }
-    } catch {
-      setError("Error al iniciar sesión. Intenta nuevamente.");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Error al iniciar sesión";
+      setError(msg.includes("401") || msg.includes("credenciales") || msg.includes("Unauthorized")
+        ? "Correo o contraseña incorrectos."
+        : "Error al iniciar sesión. Intenta nuevamente.");
     } finally {
       setLoading(false);
     }
@@ -193,7 +209,8 @@ export default function LoginPage() {
             </div>
           </div>
 
-          <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl p-8 shadow-2xl">
+          {/* Card con fondo oscuro sólido para garantizar legibilidad en todos los browsers */}
+          <div className="bg-slate-900 border border-slate-700/60 rounded-3xl p-8 shadow-2xl">
             <h2 className="text-2xl font-bold text-white mb-1">Bienvenido</h2>
             <p className="text-slate-400 text-sm mb-8">Ingresa con tus credenciales de I-NET</p>
 
@@ -208,17 +225,26 @@ export default function LoginPage() {
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="usuario@empresa.cl"
                   required
-                  className="w-full bg-white/8 border border-white/15 rounded-xl px-4 py-3 text-sm
+                  className="w-full bg-slate-800 border border-slate-600 rounded-xl px-4 py-3 text-sm
                              text-white placeholder:text-slate-500 focus:outline-none
-                             focus:ring-2 focus:ring-brand-blue/50 focus:border-brand-blue
-                             transition-all duration-200"
+                             focus:ring-2 focus:ring-brand-blue/60 focus:border-brand-blue
+                             transition-all duration-200
+                             [color-scheme:dark]"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  Contraseña
-                </label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-semibold text-slate-300">
+                    Contraseña
+                  </label>
+                  <a
+                    href="/forgot-password"
+                    className="text-xs text-brand-mid hover:text-white transition-colors"
+                  >
+                    ¿Olvidaste tu contraseña?
+                  </a>
+                </div>
                 <div className="relative">
                   <input
                     type={showPass ? "text" : "password"}
@@ -226,10 +252,11 @@ export default function LoginPage() {
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"
                     required
-                    className="w-full bg-white/8 border border-white/15 rounded-xl px-4 py-3 pr-12 text-sm
+                    className="w-full bg-slate-800 border border-slate-600 rounded-xl px-4 py-3 pr-12 text-sm
                                text-white placeholder:text-slate-500 focus:outline-none
-                               focus:ring-2 focus:ring-brand-blue/50 focus:border-brand-blue
-                               transition-all duration-200"
+                               focus:ring-2 focus:ring-brand-blue/60 focus:border-brand-blue
+                               transition-all duration-200
+                               [color-scheme:dark]"
                   />
                   <button
                     type="button"
@@ -280,7 +307,7 @@ export default function LoginPage() {
               </button>
             </form>
 
-            <div className="mt-8 pt-6 border-t border-white/8 text-center">
+            <div className="mt-8 pt-6 border-t border-slate-700/60 text-center">
               <p className="text-xs text-slate-500">
                 ¿Problemas para acceder?{" "}
                 <a href="mailto:soporte@informat.cl" className="text-brand-mid hover:text-white transition-colors">

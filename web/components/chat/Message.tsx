@@ -3,7 +3,7 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Code2, ChevronDown, ChevronUp, Sparkles, RefreshCw } from "lucide-react";
+import { Code2, ChevronDown, ChevronUp, Sparkles, RefreshCw, Star, Check, X } from "lucide-react";
 import { cn, formatRelativeTime } from "@/lib/utils";
 import { ResultTable } from "./ResultTable";
 import { ResultChart } from "./ResultChart";
@@ -12,13 +12,42 @@ import type { Message as MessageType } from "@/types";
 interface Props {
   message: MessageType;
   onFollowUp?: (q: string) => void;
+  /** La pregunta del usuario que originó esta respuesta (para guardar favorito) */
+  userQuestion?: string;
+  onSaveFavorite?: (title: string, question: string) => Promise<void>;
 }
 
-export function Message({ message, onFollowUp }: Props) {
-  const [showSql, setShowSql] = useState(false);
-  const isUser = message.role === "user";
+export function Message({ message, onFollowUp, userQuestion, onSaveFavorite }: Props) {
+  const [showSql, setShowSql]           = useState(false);
+  const [showSaveForm, setShowSaveForm] = useState(false);
+  const [favTitle, setFavTitle]         = useState("");
+  const [saving, setSaving]             = useState(false);
+  const [saved, setSaved]               = useState(false);
+
+  const isUser      = message.role === "user";
   const isStreaming = message.status === "streaming";
-  const isError = message.status === "error";
+  const isError     = message.status === "error";
+  const isDone      = message.status === "done";
+  const canFavorite = !isUser && isDone && !!userQuestion && !!onSaveFavorite;
+
+  function openSaveForm() {
+    // Pre-fill with truncated question
+    setFavTitle(userQuestion ? userQuestion.slice(0, 60) : "");
+    setShowSaveForm(true);
+  }
+
+  async function handleSave() {
+    if (!userQuestion || !onSaveFavorite || !favTitle.trim()) return;
+    setSaving(true);
+    try {
+      await onSaveFavorite(favTitle.trim(), userQuestion);
+      setSaved(true);
+      setShowSaveForm(false);
+      setTimeout(() => setSaved(false), 3000);
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <motion.div
@@ -98,7 +127,7 @@ export function Message({ message, onFollowUp }: Props) {
         )}
 
         {/* Follow-up suggestions */}
-        {!isUser && message.status === "done" && message.suggestedFollowUps && message.suggestedFollowUps.length > 0 && (
+        {!isUser && isDone && message.suggestedFollowUps && message.suggestedFollowUps.length > 0 && (
           <div className="flex flex-wrap gap-2 mt-2 max-w-3xl">
             {message.suggestedFollowUps.map((q, i) => (
               <button
@@ -116,10 +145,69 @@ export function Message({ message, onFollowUp }: Props) {
           </div>
         )}
 
-        {/* Timestamp */}
-        <span className="text-[10px] text-slate-400 px-1">
-          {formatRelativeTime(message.timestamp)}
-        </span>
+        {/* ── Inline save-favorite form ──────────────────────────────── */}
+        {canFavorite && showSaveForm && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            className="w-full max-w-sm mt-1"
+          >
+            <div className="flex items-center gap-2 bg-amber-50 dark:bg-amber-500/10 border
+                            border-amber-200 dark:border-amber-500/30 rounded-xl px-3 py-2">
+              <Star className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+              <input
+                autoFocus
+                value={favTitle}
+                onChange={(e) => setFavTitle(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") handleSave(); if (e.key === "Escape") setShowSaveForm(false); }}
+                placeholder="Nombre del favorito..."
+                className="flex-1 bg-transparent text-xs text-slate-700 dark:text-slate-200
+                           placeholder:text-slate-400 outline-none min-w-0"
+              />
+              <button
+                onClick={handleSave}
+                disabled={saving || !favTitle.trim()}
+                className="text-amber-600 hover:text-amber-700 disabled:opacity-40 transition-colors"
+                title="Guardar"
+              >
+                <Check className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={() => setShowSaveForm(false)}
+                className="text-slate-400 hover:text-slate-600 transition-colors"
+                title="Cancelar"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </motion.div>
+        )}
+
+        {/* ── Bottom action bar: timestamp + save button ──────────────── */}
+        <div className="flex items-center gap-3 px-1">
+          <span className="text-[10px] text-slate-400">
+            {formatRelativeTime(message.timestamp)}
+          </span>
+
+          {/* Save to favorites button (AI messages only, when done) */}
+          {canFavorite && !showSaveForm && (
+            <button
+              onClick={openSaveForm}
+              title={saved ? "¡Guardado!" : "Guardar como favorito"}
+              className={cn(
+                "flex items-center gap-1 text-[10px] transition-all duration-200",
+                saved
+                  ? "text-amber-500"
+                  : "text-slate-300 dark:text-slate-600 hover:text-amber-500 dark:hover:text-amber-400",
+                "opacity-0 group-hover:opacity-100"
+              )}
+            >
+              <Star className={cn("w-3 h-3", saved && "fill-amber-500")} />
+              {saved ? "Guardado" : "Guardar"}
+            </button>
+          )}
+        </div>
       </div>
     </motion.div>
   );

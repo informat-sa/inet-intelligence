@@ -1,4 +1,4 @@
-import type { StreamChunk, Conversation } from "@/types";
+import type { StreamChunk, PortalUser, Favorite, Tenant, JwtPayload, AccessibleTenant } from "@/types";
 
 /**
  * All requests go through Next.js API routes (/api/...) which proxy
@@ -26,19 +26,73 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 export async function login(email: string, password: string) {
-  return request<{ access_token: string; user: unknown }>("/auth/login", {
+  return request<{
+    access_token:      string;
+    user:              JwtPayload & { name?: string; empresa?: string; modules?: string[] };
+    accessibleTenants: AccessibleTenant[];
+  }>("/auth/login", {
     method: "POST",
     body: JSON.stringify({ email, password }),
+  });
+}
+
+export async function getMe() {
+  return request<{
+    sub: string; email: string; role: string;
+    tenantId: string | null; tenantSlug: string | null; tenantName: string | null;
+    allowedModules: string[];
+  }>("/auth/me");
+}
+
+export async function acceptInvite(token: string, name: string, password: string) {
+  return request<{ access_token: string }>("/auth/invite/accept", {
+    method: "POST",
+    body: JSON.stringify({ token, name, password }),
+  });
+}
+
+/** Step 1: request a password reset email. Always returns { ok: true } */
+export async function forgotPassword(email: string) {
+  return request<{ ok: true }>("/auth/forgot-password", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+}
+
+/** Step 2: apply new password using the reset token */
+export async function resetPassword(token: string, password: string) {
+  return request<{ ok: true }>("/auth/reset-password", {
+    method: "POST",
+    body: JSON.stringify({ token, password }),
+  });
+}
+
+/**
+ * Switch tenant context — returns a new JWT scoped to the selected company.
+ * Requires an existing authenticated session (JWT in localStorage).
+ */
+export async function selectTenant(tenantId: string) {
+  return request<{
+    access_token:      string;
+    user:              { id: string; name: string; email: string; empresa: string; modules: string[]; role: string; tenantId: string; tenantSlug: string };
+    accessibleTenants: AccessibleTenant[];
+  }>("/auth/select-tenant", {
+    method: "POST",
+    body: JSON.stringify({ tenantId }),
   });
 }
 
 // ─── Query (streaming) ────────────────────────────────────────────────────────
 export async function* streamQuery(
   question: string,
-  empresaId: string,
-  conversationId?: string
+  conversationId?: string,
+  /** When set, skip auto-detection and use exactly these module prefixes */
+  forcedModules?: string[]
 ): AsyncGenerator<StreamChunk> {
   const token = typeof window !== "undefined" ? localStorage.getItem("inet_token") : null;
+
+  const body: Record<string, unknown> = { question, conversationId };
+  if (forcedModules?.length) body.forcedModules = forcedModules;
 
   // Call the Next.js proxy route (same origin — no CORS)
   const res = await fetch(`${BASE}/query/stream`, {
@@ -48,7 +102,7 @@ export async function* streamQuery(
       Accept: "text/event-stream",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify({ question, empresaId, conversationId }),
+    body: JSON.stringify(body),
   });
 
   if (!res.ok || !res.body) throw new Error("Stream failed");
@@ -74,9 +128,93 @@ export async function* streamQuery(
   }
 }
 
-// ─── History ─────────────────────────────────────────────────────────────────
-export async function getHistory(empresaId: string): Promise<Conversation[]> {
-  return request<Conversation[]>(`/history?empresaId=${empresaId}`);
+// ─── Users (Admin panel) ──────────────────────────────────────────────────────
+export async function listUsers(): Promise<PortalUser[]> {
+  return request<PortalUser[]>("/users");
+}
+
+export async function inviteUser(data: {
+  email: string;
+  name?: string;
+  modulePermissions: string[];
+}): Promise<PortalUser> {
+  return request<PortalUser>("/users/invite", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function getUserPermissions(userId: string): Promise<{ modulePrefix: string; enabled: boolean }[]> {
+  return request<{ modulePrefix: string; enabled: boolean }[]>(`/users/${userId}/permissions`);
+}
+
+export async function setUserPermissions(userId: string, modules: string[]): Promise<void> {
+  return request<void>(`/users/${userId}/permissions`, {
+    method: "PUT",
+    body: JSON.stringify({ modules }),
+  });
+}
+
+export async function deactivateUser(userId: string): Promise<void> {
+  return request<void>(`/users/${userId}`, { method: "DELETE" });
+}
+
+export async function resendInvite(userId: string): Promise<void> {
+  return request<void>(`/users/${userId}/resend-invite`, { method: "POST" });
+}
+
+// ─── Favorites ────────────────────────────────────────────────────────────────
+export async function getFavorites(): Promise<Favorite[]> {
+  return request<Favorite[]>("/favorites");
+}
+
+export async function saveFavorite(data: {
+  title: string;
+  question: string;
+  modulesHint?: string[];
+}): Promise<Favorite> {
+  return request<Favorite>("/favorites", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteFavorite(id: string): Promise<void> {
+  return request<void>(`/favorites/${id}`, { method: "DELETE" });
+}
+
+// ─── Tenants (SuperAdmin) ─────────────────────────────────────────────────────
+export async function listTenants(): Promise<Tenant[]> {
+  return request<Tenant[]>("/tenants");
+}
+
+// ─── Schema (module explorer) ─────────────────────────────────────────────────
+export interface SchemaTableAttr {
+  name:   string;
+  title:  string;
+  type:   string;
+  length: number;
+  dec:    number;
+  desc:   string | null;
+}
+export interface SchemaTableDetail {
+  name:           string;
+  description:    string;
+  attributeCount: number;
+  attributes:     SchemaTableAttr[];
+}
+export interface SchemaModuleDetail {
+  prefix:         string;
+  name:           string;
+  description:    string;
+  keywords:       string[];
+  tableCount:     number;
+  attributeCount: number;
+  tables:         SchemaTableDetail[];
+}
+
+export async function getSchemaModule(prefix: string): Promise<SchemaModuleDetail> {
+  return request<SchemaModuleDetail>(`/schema/modules/${prefix}`);
 }
 
 // ─── Health ───────────────────────────────────────────────────────────────────
