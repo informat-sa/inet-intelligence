@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useCallback, useState } from "react";
+import { useEffect, useRef, useCallback, useState, Suspense } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { Message, TypingIndicator } from "@/components/chat/Message";
@@ -7,14 +7,14 @@ import { ChatInput } from "@/components/chat/ChatInput";
 import { WelcomeScreen } from "@/components/chat/WelcomeScreen";
 import { useChatStore } from "@/store/chat";
 import { useFavoritesStore } from "@/store/favorites";
-import { streamQuery, saveFavorite, selectTenant } from "@/lib/api";
+import { streamQuery, saveFavorite, selectTenant, upsertConversation } from "@/lib/api";
 import { generateId, ERP_MODULES } from "@/lib/utils";
 import type { Message as MessageType, StreamChunk, User } from "@/types";
 import { useRouter, useSearchParams } from "next/navigation";
 import { X, TrendingUp, Package, CreditCard, Users, FileText, Truck,
   BookOpen, ShoppingCart, Building, Ship, Landmark, Receipt,
   FileSearch, ShoppingBag, Boxes, Settings, Wallet, Wheat, Headphones,
-  Building2, ChevronDown, Check,
+  Building2, ChevronDown, Check, Menu, Sparkles,
 } from "lucide-react";
 
 const MODULE_ICONS: Record<string, React.ElementType> = {
@@ -134,13 +134,13 @@ function CompanySwitcher() {
   );
 }
 
-export default function DashboardPage() {
+function DashboardPage() {
   const router       = useRouter();
   const searchParams = useSearchParams();
   const {
-    user, activeConversationId, createConversation,
+    user, activeConversationId, conversations, createConversation,
     addMessage, updateMessage, getMessages, isStreaming, setStreaming,
-    activeModule, setActiveModule,
+    activeModule, setActiveModule, toggleSidebar, loadConversationsFromBackend,
   } = useChatStore();
 
   const activeMod = activeModule ? ERP_MODULES.find((m) => m.prefix === activeModule) : null;
@@ -152,10 +152,39 @@ export default function DashboardPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const favFiredRef = useRef(false);
 
+  // Real-time ERP connectivity status — checked every 30s
+  const [erpStatus, setErpStatus] = useState<"connected" | "disconnected" | "checking">("checking");
+  useEffect(() => {
+    let cancelled = false;
+    async function checkHealth() {
+      try {
+        const res = await fetch("/api/health");
+        if (cancelled) return;
+        if (res.ok) {
+          const data = await res.json();
+          setErpStatus(data.db ? "connected" : "disconnected");
+        } else {
+          setErpStatus("disconnected");
+        }
+      } catch {
+        if (!cancelled) setErpStatus("disconnected");
+      }
+    }
+    checkHealth();
+    const interval = setInterval(checkHealth, 30_000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, []);
+
   // Auth guard
   useEffect(() => {
     if (!user) router.push("/login");
   }, [user, router]);
+
+  // Load conversation history from backend on mount
+  useEffect(() => {
+    if (user) loadConversationsFromBackend();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
   // Scroll to bottom on new messages
   useEffect(() => {
@@ -200,18 +229,40 @@ export default function DashboardPage() {
 
     try {
       let fullContent = "";
-      let result = undefined;
+      let result: import("@/types").QueryResult | undefined = undefined;
+      const resultsList: import("@/types").QueryResult[] = [];
       let suggestedFollowUps: string[] = [];
 
-      const stream = streamQuery(question, convId, activeModule ? [activeModule] : undefined);
+      // Build conversation history for context (last 6 messages = 3 exchanges)
+      const priorMessages = getMessages(convId);
+      const history = priorMessages
+        .filter((m) => (m.role === "user" || m.role === "assistant") && m.status === "done")
+        .slice(-6)
+        .map((m) => ({
+          role: m.role as "user" | "assistant",
+          content: m.content.slice(0, 600),
+        }));
+
+      const stream = streamQuery(question, convId, activeModule ? [activeModule] : undefined, history);
 
       for await (const chunk of stream) {
         if (chunk.type === "delta" && chunk.delta) {
           fullContent += chunk.delta;
-          updateMessage(convId, aiMsgId, { content: fullContent, status: "streaming" });
+          // Backend sends pre-cleaned deltas; this is a safety net only.
+          // Supports [SQL]...[/SQL] and [SQL_N]...[/SQL_N] (multi-query).
+          const visibleContent = fullContent
+            .replace(/\[SQL(?:_\d+)?\][\s\S]*?\[\/SQL(?:_\d+)?\]/g, "")
+            .replace(/\[SQL(?:_\d+)?\][\s\S]*/g, "")
+            .replace(/\[\/SQL(?:_\d+)?\]/g, "")
+            .replace(/\[FOLLOWUPS\][\s\S]*/g, "")
+            .replace(/\[\/FOLLOWUPS\]/g, "")
+            // Fix: remove partial tags still streaming at end (e.g. "[", "[F", "[FOLLOW")
+            .replace(/\[[A-Z_\/\d]{0,12}$/i, "");
+          updateMessage(convId, aiMsgId, { content: visibleContent, status: "streaming" });
           messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
         } else if (chunk.type === "result") {
           result = chunk.result;
+          if (chunk.result) resultsList.push(chunk.result);
         } else if (chunk.type === "done") {
           suggestedFollowUps = chunk.suggestedFollowUps ?? [];
           break;
@@ -220,10 +271,20 @@ export default function DashboardPage() {
         }
       }
 
+      // Final clean before storing in history — belt-and-suspenders
+      const cleanContent = fullContent
+        .replace(/\[SQL(?:_\d+)?\][\s\S]*?\[\/SQL(?:_\d+)?\]/g, "")
+        .replace(/\[SQL(?:_\d+)?\][\s\S]*/g, "")
+        .replace(/\[\/SQL(?:_\d+)?\]/g, "")
+        .replace(/\[FOLLOWUPS\][\s\S]*/g, "")
+        .replace(/\[\/FOLLOWUPS\]/g, "")
+        .trim();
+
       updateMessage(convId, aiMsgId, {
-        content: fullContent,
+        content: cleanContent,
         status: "done",
         result,
+        results: resultsList.length > 1 ? resultsList : undefined,
         suggestedFollowUps,
       });
     } catch (err) {
@@ -235,8 +296,27 @@ export default function DashboardPage() {
     } finally {
       setStreaming(false);
       setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
+
+      // Sync completed conversation to backend (fire and forget)
+      const conv = useChatStore.getState().conversations.find((c) => c.id === convId);
+      const allMsgs = useChatStore.getState().messages[convId] ?? [];
+      const doneMsgs = allMsgs.filter((m) => m.status === "done" || m.status === "error");
+      if (conv && doneMsgs.length > 0) {
+        upsertConversation(convId, {
+          title:       conv.title,
+          modulesUsed: conv.modulesUsed,
+          messages:    doneMsgs.map((m) => ({
+            id:                  m.id,
+            role:                m.role,
+            content:             m.content,
+            modulesUsed:         m.modulesUsed ?? [],
+            suggestedFollowUps:  m.suggestedFollowUps ?? [],
+            timestamp:           m.timestamp.toISOString(),
+          })),
+        }).catch(() => {}); // silent fail — local store is still intact
+      }
     }
-  }, [user, isStreaming, activeConversationId, createConversation, addMessage, updateMessage, setStreaming]);
+  }, [user, isStreaming, activeConversationId, conversations, createConversation, addMessage, updateMessage, setStreaming]);
 
   // Save a question as favorite
   const handleSaveFavorite = useCallback(async (title: string, question: string) => {
@@ -258,38 +338,64 @@ export default function DashboardPage() {
   if (!user) return null;
 
   return (
-    <div className="flex h-screen bg-surface dark:bg-slate-950 overflow-hidden">
+    <div className="flex h-screen-mobile bg-surface dark:bg-slate-950 overflow-hidden">
       {/* Sidebar */}
-      <div className="relative flex-shrink-0">
+      <div className="relative flex-shrink-0 hidden md:block">
+        <Sidebar />
+      </div>
+      {/* Mobile: sidebar rendered outside the hidden div so overlay works */}
+      <div className="md:hidden">
         <Sidebar />
       </div>
 
       {/* Main chat area */}
-      <div className="flex flex-col flex-1 min-w-0">
+      <div className="flex flex-col flex-1 min-w-0 min-h-0">
         {/* Header */}
-        <header className="flex items-center justify-between px-6 py-4 border-b
+        <header className="flex items-center justify-between px-3 md:px-6 py-3 md:py-4 border-b
                            border-slate-100 dark:border-slate-800 bg-white/80
-                           dark:bg-slate-900/80 backdrop-blur-xl flex-shrink-0">
-          <div className="flex items-center gap-3">
-            <div>
-              <h1 className="text-sm font-bold text-slate-900 dark:text-white">
+                           dark:bg-slate-900/80 backdrop-blur-xl flex-shrink-0 gap-2">
+
+          {/* Left: hamburger (mobile) + title */}
+          <div className="flex items-center gap-2 min-w-0">
+            {/* Hamburger — mobile only */}
+            <button
+              onClick={toggleSidebar}
+              className="md:hidden w-9 h-9 flex items-center justify-center rounded-xl
+                         text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800
+                         transition-colors flex-shrink-0"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+
+            {/* Logo icon — mobile only when no conversation */}
+            {!activeConversationId && (
+              <div className="md:hidden w-7 h-7 bg-gradient-to-br from-brand-blue to-brand-navy
+                              rounded-lg flex items-center justify-center flex-shrink-0">
+                <Sparkles className="w-3.5 h-3.5 text-white" />
+              </div>
+            )}
+
+            <div className="min-w-0">
+              <h1 className="text-sm font-bold text-slate-900 dark:text-white truncate">
                 {activeConversationId
                   ? (useChatStore.getState().conversations.find(c => c.id === activeConversationId)?.title ?? "Nueva consulta")
                   : "I-NET Intelligence"}
               </h1>
-              <p className="text-[11px] text-slate-400">
+              <p className="text-[10px] text-slate-400 hidden sm:block">
                 {user.empresa} · {new Date().toLocaleDateString("es-CL", { weekday: "long", day: "numeric", month: "long" })}
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+
+          {/* Right: module chip + status — simplified on mobile */}
+          <div className="flex items-center gap-1.5 flex-shrink-0">
             {/* Active module chip */}
             {activeMod && ActiveModIcon && (
               <motion.div
                 initial={{ opacity: 0, scale: 0.9 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.9 }}
-                className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full
+                className="flex items-center gap-1 text-xs font-semibold px-2 py-1.5 rounded-full
                            border transition-all"
                 style={{
                   backgroundColor: `${activeMod.color}12`,
@@ -297,8 +403,8 @@ export default function DashboardPage() {
                   color: activeMod.color,
                 }}
               >
-                <ActiveModIcon className="w-3 h-3" />
-                {activeMod.name}
+                <ActiveModIcon className="w-3 h-3 flex-shrink-0" />
+                <span className="hidden sm:inline">{activeMod.name}</span>
                 <button
                   onClick={() => setActiveModule(null)}
                   className="ml-0.5 opacity-60 hover:opacity-100 transition-opacity"
@@ -307,14 +413,25 @@ export default function DashboardPage() {
                 </button>
               </motion.div>
             )}
-            {/* Company switcher — only shows when user has multiple companies */}
+
+            {/* Company switcher */}
             <CompanySwitcher />
 
-            <div className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400
-                            bg-emerald-50 dark:bg-emerald-500/10 px-3 py-1.5 rounded-full font-medium">
-              <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
-              ERP conectado
-            </div>
+            {/* ERP status — icon only on mobile */}
+            {erpStatus === "connected" && (
+              <div className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400
+                              bg-emerald-50 dark:bg-emerald-500/10 px-2 md:px-3 py-1.5 rounded-full font-medium">
+                <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse flex-shrink-0" />
+                <span className="hidden md:inline">Consulta en tiempo real</span>
+              </div>
+            )}
+            {erpStatus === "disconnected" && (
+              <div className="flex items-center gap-1.5 text-xs text-slate-400 dark:text-slate-500 px-2 py-1"
+                   title="Sin conexión al ERP — modo demo activo">
+                <div className="w-1.5 h-1.5 bg-slate-300 dark:bg-slate-600 rounded-full" />
+                <span className="hidden md:inline">Demo</span>
+              </div>
+            )}
           </div>
         </header>
 
@@ -362,5 +479,13 @@ export default function DashboardPage() {
         />
       </div>
     </div>
+  );
+}
+
+export default function DashboardPageWrapper() {
+  return (
+    <Suspense fallback={null}>
+      <DashboardPage />
+    </Suspense>
   );
 }

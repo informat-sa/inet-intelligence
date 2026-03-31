@@ -1,4 +1,4 @@
-import type { StreamChunk, PortalUser, Favorite, Tenant, JwtPayload, AccessibleTenant } from "@/types";
+import type { StreamChunk, PortalUser, Favorite, Tenant, TenantDetail, JwtPayload, AccessibleTenant } from "@/types";
 
 /**
  * All requests go through Next.js API routes (/api/...) which proxy
@@ -59,6 +59,11 @@ export async function forgotPassword(email: string) {
   });
 }
 
+/** Step 1b: validate a reset token before showing the form */
+export async function validateResetToken(token: string) {
+  return request<{ valid: boolean }>(`/auth/reset-password/validate?token=${encodeURIComponent(token)}`);
+}
+
 /** Step 2: apply new password using the reset token */
 export async function resetPassword(token: string, password: string) {
   return request<{ ok: true }>("/auth/reset-password", {
@@ -87,12 +92,15 @@ export async function* streamQuery(
   question: string,
   conversationId?: string,
   /** When set, skip auto-detection and use exactly these module prefixes */
-  forcedModules?: string[]
+  forcedModules?: string[],
+  /** Last N messages for conversational context */
+  history?: Array<{ role: 'user' | 'assistant'; content: string }>
 ): AsyncGenerator<StreamChunk> {
   const token = typeof window !== "undefined" ? localStorage.getItem("inet_token") : null;
 
   const body: Record<string, unknown> = { question, conversationId };
   if (forcedModules?.length) body.forcedModules = forcedModules;
+  if (history?.length) body.history = history;
 
   // Call the Next.js proxy route (same origin — no CORS)
   const res = await fetch(`${BASE}/query/stream`, {
@@ -105,6 +113,11 @@ export async function* streamQuery(
     body: JSON.stringify(body),
   });
 
+  if (res.status === 429) {
+    const retryAfter = res.headers.get("retry-after");
+    const wait = retryAfter ? ` Intenta de nuevo en ${retryAfter} segundos.` : "";
+    throw new Error(`Demasiadas consultas seguidas.${wait} Espera un momento antes de continuar.`);
+  }
   if (!res.ok || !res.body) throw new Error("Stream failed");
 
   const reader = res.body.getReader();
@@ -184,8 +197,45 @@ export async function deleteFavorite(id: string): Promise<void> {
 }
 
 // ─── Tenants (SuperAdmin) ─────────────────────────────────────────────────────
-export async function listTenants(): Promise<Tenant[]> {
-  return request<Tenant[]>("/tenants");
+export async function listTenants(): Promise<TenantDetail[]> {
+  return request<TenantDetail[]>("/tenants");
+}
+
+export async function getTenant(id: string): Promise<TenantDetail> {
+  return request<TenantDetail>(`/tenants/${id}`);
+}
+
+export interface CreateTenantData {
+  slug:           string;
+  name:           string;
+  taxId?:         string;
+  dbServer:       string;
+  dbPort?:        number;
+  dbDatabase:     string;
+  dbUser:         string;
+  dbPassword:     string;
+  dbEncrypt?:     boolean;
+  enabledModules?: string[];
+}
+
+export async function createTenant(data: CreateTenantData): Promise<TenantDetail> {
+  return request<TenantDetail>("/tenants", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateTenant(id: string, data: Partial<CreateTenantData>): Promise<TenantDetail> {
+  return request<TenantDetail>(`/tenants/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function testTenantConnection(id: string): Promise<{ success: boolean; message: string; ms?: number }> {
+  return request<{ success: boolean; message: string; ms?: number }>(`/tenants/${id}/test-connection`, {
+    method: "POST",
+  });
 }
 
 // ─── Schema (module explorer) ─────────────────────────────────────────────────
@@ -215,6 +265,82 @@ export interface SchemaModuleDetail {
 
 export async function getSchemaModule(prefix: string): Promise<SchemaModuleDetail> {
   return request<SchemaModuleDetail>(`/schema/modules/${prefix}`);
+}
+
+// ─── KPIs dashboard ───────────────────────────────────────────────────────────
+export interface KpiTrendPoint {
+  year:       number;
+  month:      number;
+  ventas:     number;
+  documentos: number;
+  clientes:   number;
+}
+
+export interface KpiData {
+  demo:              boolean;
+  periodo:           string;
+  year:              number;
+  month:             number;
+  ventasMes:         number;
+  ventasMesAnterior: number;
+  variacionPct:      number;
+  documentos:        number;
+  clientesActivos:   number;
+  ticketPromedio:    number;
+  margenBruto:       number | null;
+  mejorCliente:      { nombre: string; monto: number } | null;
+  top10Clientes:     { nombre: string; monto: number }[];
+  top10Productos:    { nombre: string; monto: number }[];
+  trend:             KpiTrendPoint[];
+}
+
+export async function getKpis(year?: number, month?: number): Promise<KpiData> {
+  const params = new URLSearchParams();
+  if (year)  params.set("year",  String(year));
+  if (month) params.set("month", String(month));
+  const qs = params.toString();
+  return request<KpiData>(`/query/kpis${qs ? `?${qs}` : ""}`);
+}
+
+// ─── Conversations (history persistence) ─────────────────────────────────────
+export interface ConversationSummary {
+  id:           string;
+  title:        string;
+  modulesUsed:  string[];
+  messageCount: number;
+  createdAt:    string;
+  updatedAt:    string;
+}
+
+export interface ConversationMessagePayload {
+  id:                  string;
+  role:                string;
+  content:             string;
+  modulesUsed?:        string[];
+  suggestedFollowUps?: string[];
+  timestamp:           string;
+}
+
+export async function listConversations(): Promise<ConversationSummary[]> {
+  return request<ConversationSummary[]>('/conversations');
+}
+
+export async function upsertConversation(
+  id: string,
+  data: {
+    title:        string;
+    modulesUsed?: string[];
+    messages:     ConversationMessagePayload[];
+  },
+): Promise<void> {
+  await request<void>(`/conversations/${id}`, {
+    method: 'PUT',
+    body:   JSON.stringify(data),
+  });
+}
+
+export async function deleteConversationApi(id: string): Promise<void> {
+  await request<void>(`/conversations/${id}`, { method: 'DELETE' });
 }
 
 // ─── Health ───────────────────────────────────────────────────────────────────

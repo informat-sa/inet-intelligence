@@ -43,7 +43,7 @@ export function generateId(): string {
 }
 
 export function detectCurrency(value: string): boolean {
-  return /precio|monto|total|valor|costo|saldo|deuda|factura|importe/i.test(value);
+  return /precio|monto|total|valor|costo|saldo|deuda|factura|importe|venta|ingreso|neto|bruto|iva|descuento|recargo|margen|comision|recaudacion|cobro|pago|haber|debe|abono|cargo/i.test(value);
 }
 
 export const ERP_MODULES: ERP_Module[] = [

@@ -47,3 +47,4 @@ coverage/
 # Large KB data files (local only — too large for git)
 docs/_full_attributes.json
 docs/_language_objects.json
+.claude/

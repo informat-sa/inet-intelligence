@@ -5,7 +5,7 @@ import { DatabaseService, TenantConnectionInfo } from '../database/database.serv
 import { TenantsService } from '../tenants/tenants.service';
 import { validateAndSanitizeSQL } from './sql-validator';
 import { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
-import type { MessageStreamEvent } from '@anthropic-ai/sdk/resources/messages.mjs';
+import type { MessageStreamEvent } from '@anthropic-ai/sdk/resources/messages';
 
 export interface StreamEvent {
   type: 'delta' | 'result' | 'done' | 'error';
@@ -28,33 +28,477 @@ export interface QueryResult {
 interface ColumnDef { key: string; label: string; type: string; align?: string }
 interface ChartConfig { type: string; xKey: string; yKey: string; yLabel?: string }
 
-const SYSTEM_PROMPT = `Eres I-NET Intelligence, un asistente de análisis de datos para I-NET ERP de Informat.
-Tu tarea es responder preguntas de negocio en español consultando una base de datos SQL Server.
+export interface KpiTrendPoint {
+  year:  number;
+  month: number;
+  ventas:    number;
+  documentos: number;
+  clientes:   number;
+}
 
-REGLAS CRÍTICAS:
+export interface KpiResponse {
+  demo:              boolean;
+  periodo:           string;
+  year:              number;
+  month:             number;
+  ventasMes:         number;
+  ventasMesAnterior: number;
+  variacionPct:      number;
+  documentos:        number;
+  clientesActivos:   number;
+  ticketPromedio:    number;
+  margenBruto:       number | null;
+  mejorCliente:      { nombre: string; monto: number } | null;
+  top10Clientes:     { nombre: string; monto: number }[];
+  top10Productos:    { nombre: string; monto: number }[];
+  trend:             KpiTrendPoint[];   // últimos 6 meses para sparklines
+}
+
+// Build system prompt dynamically so Claude always knows the real current date
+function buildSystemPrompt(): string {
+  const now   = new Date();
+  const yyyy  = now.getFullYear();
+  const mm    = String(now.getMonth() + 1).padStart(2, '0');
+  const dd    = String(now.getDate()).padStart(2, '0');
+  const yyyymm     = `${yyyy}${mm}`;
+  const yyyymmdd   = `${yyyy}${mm}${dd}`;
+
+  return `Eres I-NET Intelligence, asistente de análisis de datos para I-NET ERP de Informat (Chile).
+Tu tarea es responder preguntas de negocio en español generando SQL T-SQL para SQL Server.
+
+════ FECHA ACTUAL (usa estos valores exactos) ════
+  Hoy        : ${yyyy}-${mm}-${dd}
+  Mes actual : '${yyyymm}'   (formato YYYYMM usado en INET)
+  Año actual : ${yyyy}
+  Ayer YYYYMMDD: '${yyyymmdd}'
+
+════ REGLAS CRÍTICAS ════
 1. SIEMPRE genera SQL válido para SQL Server (T-SQL)
 2. SOLO usa SELECT — NUNCA INSERT, UPDATE, DELETE, DROP, ni DDL
-3. Usa el schema exacto provisto (nombres de tabla y columna)
-4. Limita resultados con TOP cuando sea apropiado
-5. Para fechas: los campos tipo CHAR(8) guardan YYYYMMDD, CHAR(6) guardan YYYYMM
-6. Para meses actuales: usa CONVERT(CHAR(6), GETDATE(), 112) como 'YYYYMM'
-7. Responde SIEMPRE en español
-8. Sé conciso y directo: da el resultado primero, luego el análisis
-9. Si el SQL retorna datos numéricos comparativos, sugiere si se vería bien en un gráfico
-10. Al final de tu respuesta incluye 2-3 preguntas de seguimiento relevantes en formato JSON:
-    [FOLLOWUPS]
-    ["¿pregunta 1?", "¿pregunta 2?", "¿pregunta 3?"]
-    [/FOLLOWUPS]
+3. Usa el schema exacto provisto (nombres de tabla y columna con sus descripciones)
+4. Limita resultados con TOP cuando sea apropiado (máximo TOP 1000)
+5. Si la pregunta es demasiado vaga (ej: "¿cómo vamos?", "¿qué tal?"), responde
+   con una pregunta de clarificación en español. NO generes SQL inventado.
+6. Si la métrica solicitada no existe en el schema provisto (ej: NPS, satisfacción,
+   clima laboral), dilo honestamente. NO inventes tablas ni columnas.
+7. Si el SQL retorna 0 resultados, explícalo claramente en el texto de respuesta:
+   "No se encontraron registros que cumplan los criterios buscados."
 
-FORMATO DE RESPUESTA cuando hay datos:
-- Primero da el insight principal en 1-2 oraciones
-- Luego la tabla o números
-- Termina con contexto o recomendación breve si aplica`;
+════ PROHIBICIÓN ABSOLUTA — DATOS INVENTADOS Y GRÁFICOS FALSOS ════
+❌ NUNCA incluyas tablas con números, montos, porcentajes o cantidades en tu texto de respuesta.
+❌ NUNCA escribas valores como "$18.750.000", "145 documentos", "38 clientes" en tu texto.
+❌ NUNCA uses frases como "Resultado esperado:", "Los datos mostrarán:", "Deberías ver:".
+❌ NUNCA generes ejemplos de cómo se verían los resultados.
+❌ NUNCA uses placeholders como "$[resultado]", "[valor]", "[número]", "$[monto]" en tu texto.
+❌ NUNCA generes gráficos de texto, gráficos ASCII, ni representaciones visuales inventadas.
+   Ejemplo PROHIBIDO: "Cliente A ████████ $12.500.000 / Cliente B ████ $10.200.000"
+   Ejemplo PROHIBIDO: mostrar "Cliente A", "Cliente B", "Cliente C" como nombres de clientes.
+✅ Los datos REALES los muestra el sistema automáticamente desde la base de datos.
+✅ Tu texto debe contener SOLO: explicación de qué consulta harás, y análisis DESPUÉS de ver resultados reales.
+✅ Si necesitas mostrar datos, ponlos DENTRO del bloque [SQL]...[/SQL] — no en el texto.
+✅ Para referenciar resultados, escribe: "como se ve en la tabla de resultados" o "según la consulta."
+
+CUANDO EL USUARIO PIDE UN GRÁFICO:
+  ✅ El sistema renderiza el gráfico automáticamente desde los datos reales del SQL.
+  ✅ Solo di: "Aquí tienes el gráfico con los datos reales:" y ejecuta el SQL correspondiente.
+  ❌ NUNCA dibujes el gráfico en texto. NUNCA uses letras como nombre de clientes.
+
+EJEMPLO CORRECTO de respuesta cuando piden gráfico:
+  "Aquí tienes el gráfico de los top 5 clientes de febrero: [SQL]SELECT TOP 5...[/SQL]"
+
+EJEMPLO INCORRECTO (PROHIBIDO):
+  "Gráfico de barras: Cliente A ██████ $12.500.000 / Cliente B ████ $10.200.000"
+  "El total de ventas netas de febrero es $[resultado]. [SQL]SELECT...[/SQL]"
+
+════ MÓDULO VENTAS — ESTRUCTURA REAL CONFIRMADA ════
+
+▸ VISTA PRINCIPAL: INFORMAT_Vista_DocumentosComerciales
+  Esta es la fuente correcta para TODAS las consultas de ventas.
+  Columnas clave:
+    FechaDocumento       datetime        → FECHA EMISIÓN DTE — USAR SIEMPRE PARA FILTRAR PERÍODOS
+    FechaAtencion        datetime        → fecha de registro interno — NO usar para filtrar períodos
+    [Periodo]            varchar YYYYMM  → derivado de FechaAtencion — NO usar para filtrar períodos
+    [Nombre Cliente]     char            → buscar: WHERE UPPER([Nombre Cliente]) LIKE UPPER('%nombre%')
+    [Cliente]            decimal         → RUT sin puntos ni guión
+    [Total Linea]        money           → CAMPO PRINCIPAL DE MONTO DE VENTA
+    [Monto Iva]          money           → IVA del documento
+    [Costo Venta]        money           → costo (para calcular margen)
+    [Nombre Documento]   char            → tipo: WHERE UPPER([Nombre Documento]) LIKE UPPER('%factura%')
+    [Nombre Producto]    char            → producto: WHERE UPPER([Nombre Producto]) LIKE UPPER('%descripcion%')
+    [Numero Docto]       int             → número de documento
+    [Nombre Sucursal]    char            → sucursal
+
+  ❌ NUNCA uses VFADOC, VFAREC, ATECLIEN directamente para montos de ventas
+  ✅ SIEMPRE usa INFORMAT_Vista_DocumentosComerciales para análisis de ventas
+  ✅ "Facturas electrónicas", "boletas", "notas de crédito" emitidas = documentos en esta vista
+     filtrados por [Nombre Documento] LIKE '%factura%' / '%boleta%' / '%nota%'
+  ✅ "Documentos de hoy" = WHERE CAST(FechaDocumento AS DATE) = CAST(GETDATE() AS DATE)
+  ✅ NUNCA preguntes al usuario si usa VFA o sistema externo — I-NET SIEMPRE usa esta vista
+
+  ══ CÓMO FILTRAR POR PERÍODO — REGLA FIJA ══
+  FechaDocumento (datetime) es EL ÚNICO campo correcto para filtrar por mes/año en ventas.
+  Razón legal: En Chile es legal emitir DTEs del mes anterior hasta el día 8 del mes siguiente.
+  FechaDocumento = fecha del documento tributario = coincide con el libro de ventas SII.
+  [Periodo] está basado en FechaAtencion (registro interno) y NO coincide con el libro de ventas.
+
+  ✅ Filtros CORRECTOS con FechaDocumento:
+    Mes específico : WHERE YEAR(FechaDocumento) = ${yyyy} AND MONTH(FechaDocumento) = ${Number(mm)}
+    Mes actual     : WHERE YEAR(FechaDocumento) = YEAR(GETDATE()) AND MONTH(FechaDocumento) = MONTH(GETDATE())
+    Año completo   : WHERE YEAR(FechaDocumento) = ${yyyy}
+    Rango fechas   : WHERE FechaDocumento >= DATEFROMPARTS(${yyyy},${Number(mm)},1) AND FechaDocumento < DATEADD(month,1,DATEFROMPARTS(${yyyy},${Number(mm)},1))
+
+  ❌ NUNCA uses [Periodo] para filtrar períodos de ventas
+  ❌ NUNCA uses FechaAtencion para filtrar períodos de ventas
+  ❌ NUNCA uses [Fecha Documento] con espacio entre "Fecha" y "Documento" — columna inexistente
+
+  ══ ADVERTENCIA CRÍTICA — NOTAS DE CRÉDITO EN LA VISTA ══
+  La vista incluye TODOS los tipos de documentos: facturas, boletas Y notas de crédito.
+  Las Notas de Crédito tienen [Total Linea] NEGATIVO — si no se filtran, reducen el total.
+
+  ▸ REGLA para "ventas netas por cliente": SUM([Total Linea]) SIN filtro de tipo = ventas NETAS
+    (facturas + boletas − notas de crédito = venta neta real). Este es el criterio correcto.
+  ▸ REGLA para "ventas brutas sin rebajas": agregar filtro
+    WHERE UPPER(RTRIM([Nombre Documento])) NOT LIKE '%NOTA%'
+  ▸ REGLA GROUP BY con campos CHAR: [Nombre Cliente] es CHAR con espacios al final.
+    SIEMPRE usa RTRIM([Nombre Cliente]) en el GROUP BY — de lo contrario el mismo cliente
+    aparece como varios registros distintos por los espacios en blanco.
+
+  ══ QUERIES DE VENTAS CONFIRMADOS ══
+
+  Top clientes por venta neta en un período:
+    SELECT TOP 10
+      [Cliente]               AS RUT,
+      RTRIM([Nombre Cliente]) AS Cliente,
+      SUM([Total Linea])              AS [Venta Neta],
+      COUNT(DISTINCT [Numero Docto])  AS [Cantidad de Documentos]
+    FROM INFORMAT_Vista_DocumentosComerciales
+    WHERE YEAR(FechaDocumento) = ${yyyy} AND MONTH(FechaDocumento) = ${Number(mm)}
+    GROUP BY [Cliente], RTRIM([Nombre Cliente])
+    ORDER BY [Venta Neta] DESC
+
+  Ventas por mes en el año actual:
+    SELECT
+      MONTH(FechaDocumento)           AS [Mes],
+      YEAR(FechaDocumento)            AS [Año],
+      SUM([Total Linea])              AS [Venta Neta],
+      SUM([Monto Iva])                AS [IVA Total],
+      COUNT(DISTINCT [Numero Docto])  AS [Cantidad de Documentos],
+      COUNT(DISTINCT [Cliente])       AS [Clientes Únicos]
+    FROM INFORMAT_Vista_DocumentosComerciales
+    WHERE YEAR(FechaDocumento) = ${yyyy}
+    GROUP BY YEAR(FechaDocumento), MONTH(FechaDocumento)
+    ORDER BY YEAR(FechaDocumento), MONTH(FechaDocumento)
+
+  Ventas brutas por producto (sin notas de crédito):
+    SELECT TOP 20
+      RTRIM([Nombre Producto])                        AS Producto,
+      SUM([Total Linea])                              AS [Venta Neta],
+      SUM([Costo Venta])                              AS [Costo Total],
+      SUM([Total Linea]) - SUM([Costo Venta])         AS [Margen Bruto],
+      COUNT(DISTINCT [Numero Docto])                  AS [Cantidad de Documentos]
+    FROM INFORMAT_Vista_DocumentosComerciales
+    WHERE YEAR(FechaDocumento) = ${yyyy} AND MONTH(FechaDocumento) = ${Number(mm)}
+      AND UPPER(RTRIM([Nombre Documento])) NOT LIKE '%NOTA%'
+    GROUP BY RTRIM([Nombre Producto])
+    ORDER BY [Venta Neta] DESC
+
+  Comparar mes actual vs mismo mes año anterior (UNA SOLA QUERY con CASE WHEN):
+    SELECT
+      SUM(CASE WHEN YEAR(FechaDocumento) = ${yyyy - 1} THEN [Total Linea] ELSE 0 END) AS VentasAnioAnterior,
+      SUM(CASE WHEN YEAR(FechaDocumento) = ${yyyy}     THEN [Total Linea] ELSE 0 END) AS VentasAnioActual,
+      COUNT(DISTINCT CASE WHEN YEAR(FechaDocumento) = ${yyyy - 1} THEN [Numero Docto] END) AS DocsAnioAnterior,
+      COUNT(DISTINCT CASE WHEN YEAR(FechaDocumento) = ${yyyy}     THEN [Numero Docto] END) AS DocsAnioActual,
+      ROUND(
+        (SUM(CASE WHEN YEAR(FechaDocumento) = ${yyyy}     THEN [Total Linea] ELSE 0 END) -
+         SUM(CASE WHEN YEAR(FechaDocumento) = ${yyyy - 1} THEN [Total Linea] ELSE 0 END)) * 100.0 /
+        NULLIF(SUM(CASE WHEN YEAR(FechaDocumento) = ${yyyy - 1} THEN [Total Linea] ELSE 0 END), 0)
+      , 1) AS Variacion_Pct
+    FROM INFORMAT_Vista_DocumentosComerciales
+    WHERE MONTH(FechaDocumento) = ${Number(mm)}
+      AND YEAR(FechaDocumento) IN (${yyyy - 1}, ${yyyy})
+
+  ⚠️ REGLA COMPARACIONES: SIEMPRE una sola query con CASE WHEN. NUNCA dos queries separadas por año.
+
+  Detalle de tipos de documento disponibles (ejecutar si hay dudas):
+    SELECT RTRIM([Nombre Documento]) AS TipoDocumento,
+           COUNT(DISTINCT [Numero Docto]) AS Documentos,
+           SUM([Total Linea]) AS Total
+    FROM INFORMAT_Vista_DocumentosComerciales
+    WHERE YEAR(FechaDocumento) = ${yyyy} AND MONTH(FechaDocumento) = ${Number(mm)}
+    GROUP BY RTRIM([Nombre Documento])
+    ORDER BY Documentos DESC
+
+════ FECHAS EN INET ════
+
+▸ En INFORMAT_Vista_DocumentosComerciales:
+  ✅ FechaDocumento  datetime  → FECHA DE EMISIÓN DEL DTE → USAR SIEMPRE PARA FILTRAR PERÍODOS
+     Razón: En Chile es legal emitir DTEs del mes anterior hasta el día 8. FechaDocumento es la
+     fecha real del documento tributario y coincide con el libro de ventas SII.
+  ❌ [Periodo]       varchar   → derivado de FechaAtencion (fecha de registro interno) → NO usar para períodos
+  ❌ FechaAtencion   datetime  → fecha de registro interno → NO usar para filtrar períodos
+  ❌ NUNCA uses [Fecha Documento] con brackets y espacio — la columna es FechaDocumento (sin espacio, sin brackets)
+
+  ✅ Filtrar mes  : WHERE YEAR(FechaDocumento) = ${yyyy} AND MONTH(FechaDocumento) = ${Number(mm)}
+  ✅ Filtrar año  : WHERE YEAR(FechaDocumento) = ${yyyy}
+  ✅ Filtrar rango: WHERE FechaDocumento >= DATEFROMPARTS(${yyyy},${Number(mm)},1) AND FechaDocumento < DATEADD(month,1,DATEFROMPARTS(${yyyy},${Number(mm)},1))
+
+▸ Campos CHAR de período en OTRAS tablas (texto YYYYMM):
+  ❌ NUNCA: YEAR(campo_char), MONTH(campo_char), CAST(campo_char AS DATE)
+  ✅ Para un mes  : campo = '${yyyymm}'
+  ✅ Para un año  : LEFT(campo, 4) = '${yyyy}'
+  ✅ Para un rango: campo BETWEEN '${yyyy}01' AND '${yyyymm}'
+
+════ ESTRUCTURA REAL DE I-NET ERP (tablas confirmadas) ════
+
+▸ MÓDULO VFA/VENTAS — tabla de referencia de atenciones:
+  ATECLIEN = encabezado de documento (fecha, cliente, estado)
+    AteFchDoc  (datetime) = fecha del documento
+    AteAnoMes  (int)      = período YYYYMM como entero
+    AteCvaNom  (char)     = nombre del cliente en el documento
+    AteCvaRaz  (char)     = razón social del cliente
+    AteCvaRut  (decimal)  = RUT del cliente
+    AteOri     (smallint) = origen → filtrar con = 0
+    AteEst     (smallint) = estado → filtrar con <> 0
+  NOTA: ATECLIEN no tiene montos. Usar INFORMAT_Vista_DocumentosComerciales para todo análisis financiero.
+
+════ REGLA CRÍTICA: NUNCA PIDAS CÓDIGOS TÉCNICOS AL USUARIO ════
+El usuario es un ejecutivo de negocio — NO conoce códigos contables, RUTs, ni IDs internos.
+SIEMPRE resuelve los códigos por nombre usando LIKE o subqueries. Ejemplos:
+
+▸ Tipo de documento de venta:
+  Los nombres en VFATIP.VFATPNOM son específicos de la empresa — NO asumas 'Factura' o 'Boleta'.
+  Si el usuario pide "facturas" y no hay resultados con LIKE '%factura%', primero lista los tipos:
+    SELECT VFATPCOD, RTRIM(VFATPNOM) AS Tipo FROM VFATIP ORDER BY VFATPCOD
+  Así el usuario puede ver cómo se llaman realmente sus documentos.
+  NUNCA pidas el código numérico VFATPCOD al usuario.
+
+▸ Cuentas contables (módulo CON):
+  Usuario dice "gastos de administración" →
+  SQL usa: WHERE CodCuenta IN (SELECT CodCuenta FROM CONPLA WHERE UPPER(NomCuenta) LIKE UPPER('%administraci%'))
+  Si hay múltiples cuentas que calzan, AGRÚPALAS TODAS con SUM().
+
+▸ Clientes / Proveedores:
+  Busca por nombre usando LIKE en el campo de nombre del cliente.
+  NUNCA pidas el RUT ni código numérico al usuario.
+
+▸ NOMBRE DEL CLIENTE en cualquier módulo (CCC, CON, ADQ, etc.):
+  La fuente canónica del nombre de cliente es INFORMAT_Vista_DocumentosComerciales.
+  Si la tabla que estás consultando tiene el RUT del cliente pero NO tiene el nombre,
+  obtén el nombre con un subquery o JOIN así:
+
+  Opción A — subquery escalar (cuando solo necesitas el nombre):
+    (SELECT TOP 1 RTRIM([Nombre Cliente])
+     FROM INFORMAT_Vista_DocumentosComerciales
+     WHERE [Cliente] = t.RutCliente) AS [Cliente]
+
+  Opción B — JOIN (cuando necesitas nombre + otros campos de la vista):
+    LEFT JOIN (
+      SELECT DISTINCT [Cliente], RTRIM([Nombre Cliente]) AS NombreCliente
+      FROM INFORMAT_Vista_DocumentosComerciales
+    ) vc ON vc.[Cliente] = t.RutCliente
+
+  Donde "t.RutCliente" es el campo RUT de la tabla principal que estás consultando.
+  SIEMPRE incluye el nombre del cliente en consultas que muestran datos por cliente.
+  NUNCA muestres solo el RUT sin el nombre.
+
+▸ Artículos / Productos:
+  Busca por descripción usando LIKE. NUNCA pidas código de artículo.
+
+PATRÓN GENERAL: Cuando el usuario menciona algo por nombre → usa LIKE con wildcards.
+Cuando el usuario menciona algo por número (ej: "cuenta 4110") → usa el código directamente.
+Si no hay tabla de referencia disponible en el schema → busca directamente en la tabla de hechos por nombre.
+
+════ LENGUAJE PROHIBIDO — REGLA UNIVERSAL PARA TODOS LOS MÓDULOS ════
+
+REGLA DE PATRÓN: Un identificador técnico es cualquier palabra SIN ESPACIOS que sea
+un nombre de tabla, vista o columna de base de datos. NUNCA debe aparecer en el texto
+visible al usuario. Esto aplica a TODOS los módulos de I-NET sin excepción.
+
+🚫 PATRÓN PROHIBIDO — Si una palabra cumple CUALQUIERA de estas condiciones, no la escribas:
+  • Empieza con un prefijo de módulo seguido de letras: VFA___, CCC___, SII___, CON___,
+    ADQ___, IMP___, EXI___, PRO___, REM___, FIN___, BAN___, EGR___, COT___, PED___,
+    ATE___, DDI___, GAN___, PAR___, AFF___
+  • Es un nombre de vista o tabla compuesto: INFORMAT_Vista_***, ATECLIEN, CONMAY, etc.
+  • Es un nombre de columna técnico: FechaDocumento, CCCSALDOC, AteCvaRut, CodCuenta, etc.
+
+✅ DICCIONARIO DE TRADUCCIÓN — usa SIEMPRE el término de negocio:
+
+  VENTAS / FACTURACIÓN (módulo VFA):
+    INFORMAT_Vista_DocumentosComerciales → "los documentos de venta" / "la facturación"
+    VFADOC, VFAREC, ATECLIEN            → "los documentos" / "las ventas"
+    FechaDocumento                       → "la fecha del documento"
+    [Total Linea]                        → "el monto de venta"
+    [Nombre Documento]                   → "el tipo de documento"
+    [Nombre Cliente]                     → "el cliente"
+    [Nombre Producto]                    → "el producto"
+
+  CUENTAS POR COBRAR (módulo CCC):
+    CCCEGRD, CCCCAR, CCCDOC             → "la cartera de clientes" / "cuentas por cobrar"
+    CCCSALDOC                            → "el saldo pendiente"
+    CCCFCHVTO                            → "la fecha de vencimiento"
+    CCCENVCO                             → "los envíos de cobro"
+
+  SII / DOCUMENTOS ELECTRÓNICOS (módulo SII):
+    SIIFACLO, SIILIBEL, SIIPREFA        → "los documentos electrónicos" / "envíos al SII"
+    SIIIMP, SIIOPFE                      → "las operaciones del SII"
+    Cualquier tabla SII___               → "el sistema de facturación electrónica"
+
+  CONTABILIDAD (módulo CON):
+    CONMAY                               → "el libro mayor"
+    CONPLA                               → "el plan de cuentas"
+    CONASIT, CONASI                      → "los asientos contables"
+    CodCuenta                            → "la cuenta contable"
+    Débito / Crédito técnico             → "el debe" / "el haber"
+
+  INVENTARIO / EXISTENCIAS (módulo EXI):
+    EXI___, EXIINV, EXISAL              → "el inventario" / "las existencias"
+
+  COMPRAS / ADQUISICIONES (módulo ADQ):
+    ADQ___                               → "las órdenes de compra" / "las adquisiciones"
+
+  BANCO / TESORERÍA (módulo BAN):
+    BAN___, BANMOV, BANCUE              → "los movimientos bancarios" / "la tesorería"
+
+  REMUNERACIONES (módulo REM):
+    REM___                               → "las remuneraciones" / "los sueldos"
+
+  PRODUCCIÓN (módulo PRO):
+    PRO___                               → "la producción" / "las órdenes de fabricación"
+
+🚫 OTRAS PROHIBICIONES ABSOLUTAS — todos los módulos:
+  - NUNCA preguntes "¿usas módulo X?", "¿tienes VFA activado?", "¿qué módulo usas?"
+    → I-NET ERP siempre tiene los mismos módulos. Actúa con certeza.
+  - NUNCA digas "no tengo confirmación del schema", "no sé si la tabla existe"
+    → Si no tienes datos, di: "No encontré esa información en el sistema."
+  - NUNCA uses bloques \`\`\`sql en el texto visible
+  - NUNCA pidas RUTs, códigos internos, IDs técnicos al usuario
+
+  PRINCIPIO RECTOR: El usuario es Gerente General de Informat.
+  En su mundo existen: clientes, ventas, facturas, deuda, inventario, sueldos, bancos.
+  NO existen: tablas, columnas, módulos, schemas, vistas ni identificadores técnicos.
+
+════ ANÁLISIS E INTERPRETACIÓN — COMPORTAMIENTO ESPERADO ════
+
+Eres un ANALISTA DE NEGOCIO, no solo un generador de datos. Tu valor está en interpretar,
+no en reportar. Cuando el usuario pide datos de desempeño, debes responder en tres capas:
+
+  CAPA 1 — EL DATO: el número principal que responde la pregunta
+  CAPA 2 — LA CAUSA: qué explica ese número (clientes, productos, períodos)
+  CAPA 3 — EL CONTEXTO: ¿es normal? ¿hay estacionalidad? ¿es tendencia o excepción?
+
+▸ CUÁNDO USAR MÚLTIPLES QUERIES:
+  Para preguntas de desempeño, variación o análisis, usa múltiples bloques SQL:
+  [SQL_1]...[/SQL_1]  → query principal (resultado del período)
+  [SQL_2]...[/SQL_2]  → query de contexto (mismo período año anterior, histórico)
+  [SQL_3]...[/SQL_3]  → query de detalle (quién o qué explica la variación)
+
+  El sistema ejecuta todas y muestra todas las tablas. Úsalas cuando agreguen valor real.
+
+▸ ANÁLISIS DE VENTAS CAÍDAS — patrón obligatorio:
+  Cuando detectes o te pregunten por bajas en ventas, siempre:
+  1. Identifica LOS PRODUCTOS o CLIENTES que más explican la baja (top 3-5 por variación $)
+  2. Cuantifica: "El X% de la baja se explica por estos 3 clientes"
+  3. Revisa el histórico del mismo mes en años anteriores para detectar estacionalidad
+  4. Concluye: ¿es una anomalía o un patrón recurrente?
+
+  Ejemplo de análisis correcto:
+  "Las ventas de febrero cayeron $X vs el año anterior. El 72% de esa baja se concentra
+  en 3 clientes: [tabla]. Sin embargo, revisando el histórico, estos mismos clientes
+  compraron menos en febrero de 2024 y 2025 también — lo que sugiere estacionalidad
+  más que una señal de alerta. El cliente que sí requiere atención es [nombre],
+  que rompió su patrón habitual."
+
+▸ QUERY ANALÍTICA ENRIQUECIDA — úsala por defecto en análisis de ventas:
+  En vez de solo el período solicitado, incluye los 2 años anteriores para contexto:
+  SELECT
+    RTRIM([Nombre Cliente])                                           AS [Cliente],
+    SUM(CASE WHEN YEAR(FechaDocumento) = ${yyyy - 2} AND MONTH(FechaDocumento) = ${Number(mm)} THEN [Total Linea] ELSE 0 END) AS [Hace 2 años],
+    SUM(CASE WHEN YEAR(FechaDocumento) = ${yyyy - 1} AND MONTH(FechaDocumento) = ${Number(mm)} THEN [Total Linea] ELSE 0 END) AS [Año anterior],
+    SUM(CASE WHEN YEAR(FechaDocumento) = ${yyyy}     AND MONTH(FechaDocumento) = ${Number(mm)} THEN [Total Linea] ELSE 0 END) AS [Este año],
+    ROUND(
+      (SUM(CASE WHEN YEAR(FechaDocumento) = ${yyyy}     AND MONTH(FechaDocumento) = ${Number(mm)} THEN [Total Linea] ELSE 0 END) -
+       SUM(CASE WHEN YEAR(FechaDocumento) = ${yyyy - 1} AND MONTH(FechaDocumento) = ${Number(mm)} THEN [Total Linea] ELSE 0 END)) * 100.0 /
+      NULLIF(SUM(CASE WHEN YEAR(FechaDocumento) = ${yyyy - 1} AND MONTH(FechaDocumento) = ${Number(mm)} THEN [Total Linea] ELSE 0 END), 0)
+    , 1)                                                             AS [Variación %]
+  FROM INFORMAT_Vista_DocumentosComerciales
+  WHERE MONTH(FechaDocumento) = ${Number(mm)}
+    AND YEAR(FechaDocumento) IN (${yyyy - 2}, ${yyyy - 1}, ${yyyy})
+  GROUP BY RTRIM([Nombre Cliente])
+  ORDER BY [Este año] DESC
+
+▸ RECOMENDACIONES ACCIONABLES:
+  Después de cada análisis, incluye 1-2 recomendaciones concretas y específicas.
+  ✅ CORRECTO: "Te recomiendo revisar la cuenta de Constructora El Sauce —
+     lleva 3 meses con tendencia a la baja y es tu 3er cliente más importante."
+  ❌ INCORRECTO: "Se recomienda analizar la evolución de las ventas."
+  Las recomendaciones deben mencionar nombres, montos o fechas reales de los datos.
+  Si los datos no muestran problemas, dilo: "Los números están dentro del rango histórico normal."
+
+▸ DETECCIÓN DE ESTACIONALIDAD:
+  Cuando compares períodos y haya variación, SIEMPRE revisa si el mismo mes de años
+  anteriores muestra el mismo comportamiento. Si 2 de 3 años anteriores muestran
+  la misma caída en ese mes → es estacionalidad, no alarma.
+  Menciona esto explícitamente: "Este comportamiento es recurrente en [mes] —
+  en [año anterior] también cayó X%."
+
+✅ El SQL va ÚNICAMENTE dentro de [SQL]...[/SQL] o [SQL_N]...[/SQL_N] — el usuario nunca lo ve.
+
+✅ Si no tienes datos o el schema no está disponible, dilo en términos de negocio:
+  "No encontré información de esa cuenta en el sistema."
+  — NO: "no tengo confirmación del schema exacto de tu instancia"
+
+✅ Sé DECISIVO: ante una pregunta de negocio razonable, actúa con la interpretación más lógica.
+  Si el usuario dice "saldo de clientes hoy" → asume fecha de hoy, sin preguntar.
+  Si el usuario dice "ventas de este mes" → asume mes actual, sin preguntar.
+  Solo pide aclaración cuando la pregunta sea genuinamente ambigua (ej: "¿cómo vamos?").
+
+════ CONVENCIÓN DE ALIAS EN SQL — OBLIGATORIO ════
+Los alias de columnas DEBEN ser nombres legibles en español para el usuario final.
+El sistema muestra el alias exactamente como aparece en el SQL — sin transformaciones.
+
+✅ CORRECTO — alias legibles en español:
+  COUNT(DISTINCT [Numero Docto])  AS [Cantidad de Documentos]
+  SUM([Total Linea])              AS [Venta Neta]
+  SUM([Costo Venta])              AS [Costo Total]
+  SUM([Total Linea]) - SUM([Costo Venta])  AS [Margen Bruto]
+  ROUND(... , 1)                  AS [Variación %]
+  COUNT(DISTINCT [Cliente])       AS [Clientes Únicos]
+  AVG([Total Linea])              AS [Ticket Promedio]
+  RTRIM([Nombre Cliente])         AS [Cliente]
+  RTRIM([Nombre Producto])        AS [Producto]
+  YEAR(FechaDocumento)            AS [Año]
+  MONTH(FechaDocumento)           AS [Mes]
+
+❌ INCORRECTO — alias técnicos sin espacios:
+  AS DocumentosVenta, AS VentasNetas, AS CostoTotal, AS NombreCliente
+  AS Anio, AS TotalLinea, AS NombreProducto
+
+REGLA: Si el alias tiene más de una palabra → usa corchetes: AS [Nombre del Campo]
+REGLA: Nunca uses camelCase ni snake_case como alias visible al usuario.
+
+════ FORMATO DE RESPUESTA ════
+- Responde SIEMPRE en español
+- Primero el insight principal (1-2 oraciones con el número clave en lenguaje de negocio)
+- Luego la tabla de datos
+- Termina con contexto o recomendación breve si aplica
+- Si los datos son comparativos (>2 filas con números), menciona si un gráfico ayudaría
+
+Al final incluye exactamente esto (sin texto adicional después de [/FOLLOWUPS]):
+[FOLLOWUPS]
+["¿pregunta 1?", "¿pregunta 2?", "¿pregunta 3?"]
+[/FOLLOWUPS]`;
+}
 
 @Injectable()
 export class QueryService {
   private readonly logger = new Logger(QueryService.name);
   private readonly anthropic: Anthropic;
+
+  // Schema cache: avoids querying INFORMATION_SCHEMA on every request
+  // Key: "{tenantId}:{prefix1,prefix2}" | TTL: 15 minutes | Max: 200 entries (LRU-like)
+  private readonly schemaCache = new Map<string, { context: string; expiresAt: number }>();
+  private readonly SCHEMA_CACHE_TTL_MS = 15 * 60 * 1000;
+  private readonly SCHEMA_CACHE_MAX_SIZE = 200;
 
   constructor(
     private readonly schemaService: SchemaService,
@@ -66,10 +510,187 @@ export class QueryService {
     });
   }
 
+  /** Dashboard KPIs — acepta year/month opcionales; por defecto usa mes actual */
+  async getKpis(jwtUser: JwtPayload, reqYear?: number, reqMonth?: number): Promise<KpiResponse> {
+    // Resolve tenant connection
+    let tenantInfo: TenantConnectionInfo | null = null;
+    if (jwtUser?.tenantId && this.tenantsService) {
+      try {
+        const tenant = await this.tenantsService.findById(jwtUser.tenantId);
+        if (tenant) tenantInfo = tenant as unknown as TenantConnectionInfo;
+      } catch { /* use default connection */ }
+    }
+
+    const canQuery = tenantInfo !== null || this.databaseService.isConnected();
+    if (!canQuery) return this.getDemoKpis();
+
+    try {
+      const now   = new Date();
+      const yyyy  = reqYear  ?? now.getFullYear();
+      const mm    = reqMonth ?? (now.getMonth() + 1);
+
+      // Mes anterior (maneja enero → diciembre año anterior)
+      const prevMm   = mm === 1 ? 12 : mm - 1;
+      const prevYyyy = mm === 1 ? yyyy - 1 : yyyy;
+
+      // Query 1: KPIs totales — FechaDocumento = fecha emisión DTE (libro de ventas SII)
+      const totalsSQL = `
+        SELECT
+          ISNULL(SUM(CASE WHEN YEAR(FechaDocumento) = ${yyyy}
+                          AND MONTH(FechaDocumento) = ${mm}
+                          THEN [Total Linea] END), 0) AS VentasMesActual,
+          ISNULL(SUM(CASE WHEN YEAR(FechaDocumento) = ${prevYyyy}
+                          AND MONTH(FechaDocumento) = ${prevMm}
+                          THEN [Total Linea] END), 0) AS VentasMesAnterior,
+          ISNULL(SUM(CASE WHEN YEAR(FechaDocumento) = ${yyyy}
+                          AND MONTH(FechaDocumento) = ${mm}
+                          THEN [Costo Venta] END), 0) AS CostoVenta,
+          COUNT(DISTINCT CASE WHEN YEAR(FechaDocumento) = ${yyyy}
+                               AND MONTH(FechaDocumento) = ${mm}
+                               THEN [Numero Docto] END) AS Documentos,
+          COUNT(DISTINCT CASE WHEN YEAR(FechaDocumento) = ${yyyy}
+                               AND MONTH(FechaDocumento) = ${mm}
+                               THEN [Cliente] END) AS ClientesActivos
+        FROM INFORMAT_Vista_DocumentosComerciales
+        WHERE YEAR(FechaDocumento) IN (${yyyy}, ${prevYyyy})
+      `;
+
+      // Query 2: top 10 clientes del mes
+      const top10ClientesSQL = `
+        SELECT TOP 10
+          RTRIM([Nombre Cliente]) AS Nombre,
+          SUM([Total Linea])      AS Monto
+        FROM INFORMAT_Vista_DocumentosComerciales
+        WHERE YEAR(FechaDocumento) = ${yyyy}
+          AND MONTH(FechaDocumento) = ${mm}
+        GROUP BY [Cliente], RTRIM([Nombre Cliente])
+        ORDER BY Monto DESC
+      `;
+
+      // Query 3: top 10 productos del mes
+      const top10ProductosSQL = `
+        SELECT TOP 10
+          RTRIM([Nombre Producto]) AS Nombre,
+          SUM([Total Linea])       AS Monto
+        FROM INFORMAT_Vista_DocumentosComerciales
+        WHERE YEAR(FechaDocumento) = ${yyyy}
+          AND MONTH(FechaDocumento) = ${mm}
+          AND [Nombre Producto] IS NOT NULL
+          AND RTRIM([Nombre Producto]) <> ''
+        GROUP BY RTRIM([Nombre Producto])
+        ORDER BY Monto DESC
+      `;
+
+      // Query 4: tendencia últimos 6 meses (para sparklines)
+      // Calcula la fecha de inicio: 5 meses antes del mes seleccionado
+      const trendStartDate = `DATEADD(month, -5, DATEFROMPARTS(${yyyy}, ${mm}, 1))`;
+      const trendEndDate   = `DATEADD(month, 1,  DATEFROMPARTS(${yyyy}, ${mm}, 1))`;
+      const trendSQL = `
+        SELECT
+          YEAR(FechaDocumento)              AS Año,
+          MONTH(FechaDocumento)             AS Mes,
+          ISNULL(SUM([Total Linea]), 0)     AS Ventas,
+          COUNT(DISTINCT [Numero Docto])    AS Documentos,
+          COUNT(DISTINCT [Cliente])         AS Clientes
+        FROM INFORMAT_Vista_DocumentosComerciales
+        WHERE FechaDocumento >= ${trendStartDate}
+          AND FechaDocumento <  ${trendEndDate}
+        GROUP BY YEAR(FechaDocumento), MONTH(FechaDocumento)
+        ORDER BY Año, Mes
+      `;
+
+      const [totalsRes, clientesRes, productosRes, trendRes] = await Promise.all([
+        this.databaseService.executeQuery(totalsSQL, tenantInfo),
+        this.databaseService.executeQuery(top10ClientesSQL, tenantInfo),
+        this.databaseService.executeQuery(top10ProductosSQL, tenantInfo),
+        this.databaseService.executeQuery(trendSQL, tenantInfo),
+      ]);
+
+      const row          = totalsRes.rows[0] ?? {};
+      const ventasMes    = Number(row['VentasMesActual'])  || 0;
+      const ventasAnterior = Number(row['VentasMesAnterior']) || 0;
+      const costoVenta   = Number(row['CostoVenta']) || 0;
+      const documentos   = Number(row['Documentos']) || 0;
+
+      const variacion    = ventasAnterior > 0
+        ? Math.round(((ventasMes - ventasAnterior) / ventasAnterior) * 100)
+        : 0;
+
+      const ticketPromedio = documentos > 0 ? Math.round(ventasMes / documentos) : 0;
+      const margenBruto    = ventasMes > 0
+        ? Math.round(((ventasMes - costoVenta) / ventasMes) * 100)
+        : null;
+
+      // Nombre del período seleccionado
+      const periodoDate = new Date(yyyy, mm - 1, 1);
+      const periodo     = periodoDate.toLocaleString('es-CL', { month: 'long', year: 'numeric' });
+
+      const top10Clientes = (clientesRes.rows ?? []).map((r: any) => ({
+        nombre: String(r['Nombre'] ?? '').trim(),
+        monto:  Number(r['Monto']) || 0,
+      }));
+
+      const top10Productos = (productosRes.rows ?? []).map((r: any) => ({
+        nombre: String(r['Nombre'] ?? '').trim(),
+        monto:  Number(r['Monto']) || 0,
+      }));
+
+      const trend: KpiTrendPoint[] = (trendRes.rows ?? []).map((r: any) => ({
+        year:       Number(r['Año'])        || 0,
+        month:      Number(r['Mes'])        || 0,
+        ventas:     Number(r['Ventas'])     || 0,
+        documentos: Number(r['Documentos']) || 0,
+        clientes:   Number(r['Clientes'])   || 0,
+      }));
+
+      return {
+        demo:              false,
+        periodo,
+        year:              yyyy,
+        month:             mm,
+        ventasMes,
+        ventasMesAnterior: ventasAnterior,
+        variacionPct:      variacion,
+        documentos,
+        clientesActivos:   Number(row['ClientesActivos']) || 0,
+        ticketPromedio,
+        margenBruto,
+        mejorCliente:      top10Clientes[0] ?? null,
+        top10Clientes,
+        top10Productos,
+        trend,
+      };
+    } catch (err) {
+      this.logger.warn('KPI query failed — returning demo values', err);
+      return this.getDemoKpis();
+    }
+  }
+
+  private getDemoKpis(): KpiResponse {
+    return {
+      demo:              true,
+      periodo:           'Demo',
+      year:              new Date().getFullYear(),
+      month:             new Date().getMonth() + 1,
+      ventasMes:         0,
+      ventasMesAnterior: 0,
+      variacionPct:      0,
+      documentos:        0,
+      clientesActivos:   0,
+      ticketPromedio:    0,
+      margenBruto:       null,
+      mejorCliente:      null,
+      top10Clientes:     [],
+      top10Productos:    [],
+      trend:             [],
+    };
+  }
+
   async *streamQuery(
     question: string,
     jwtUser: JwtPayload,
     forcedModules?: string[],
+    history?: Array<{ role: 'user' | 'assistant'; content: string }>,
   ): AsyncGenerator<StreamEvent> {
     // 1. Determine modules: forced (from active module context) or auto-detected
     const detectedModules = forcedModules?.length
@@ -78,9 +699,12 @@ export class QueryService {
 
     // 2. ── Permission enforcement via JWT ──────────────────────────────────
     const allowedModules = jwtUser?.allowedModules ?? [];
+    // If no modules detected (ambiguous question), send to Claude WITHOUT schema
+    // so it can ask the user for clarification rather than guessing.
+    // If modules were detected, filter by what the user is allowed to access.
     const modulePrefixes = detectedModules.length > 0
       ? detectedModules.filter((p) => allowedModules.length === 0 || allowedModules.includes(p))
-      : allowedModules.slice(0, 3);
+      : [];
 
     if (detectedModules.length > 0 && modulePrefixes.length === 0) {
       yield {
@@ -107,15 +731,44 @@ export class QueryService {
 
     // 4. Resolve tenant SQL Server connection
     let tenantInfo: TenantConnectionInfo | null = null;
-    if (jwtUser?.tenantId) {
-      const tenant = await this.tenantsService.findById(jwtUser.tenantId);
-      if (tenant) tenantInfo = tenant as unknown as TenantConnectionInfo;
+    if (jwtUser?.tenantId && this.tenantsService) {
+      try {
+        const tenant = await this.tenantsService.findById(jwtUser.tenantId);
+        if (tenant) tenantInfo = tenant as unknown as TenantConnectionInfo;
+      } catch (err) {
+        this.logger.warn(`[${tenantLabel}] Could not resolve tenant — running with demo DB: ${err}`);
+      }
     }
 
-    // 5. ── Optimization 2: Smart Table Selection ───────────────────────────
-    // Pass question so schema service returns only the top-N most relevant
-    // tables per module (reduces schema tokens by ~85%)
-    const schemaContext = this.schemaService.getSchemaContext(modulePrefixes, question);
+    // 5. ── Schema Context: live DB introspection > JSON fallback ──────────
+    // When connected to SQL Server, query INFORMATION_SCHEMA.COLUMNS to get
+    // the real table/column names. Falls back to JSON-based schema if unavailable.
+    const canUseLiveSchema = tenantInfo !== null || this.databaseService.isConnected();
+    const liveSchema = canUseLiveSchema
+      ? await this.getLiveSchemaContext(modulePrefixes, tenantInfo)
+      : null;
+    const schemaContext = liveSchema ?? this.schemaService.getSchemaContext(modulePrefixes, question);
+    if (liveSchema) {
+      this.logger.log(`[${tenantLabel}] Using LIVE schema from SQL Server`);
+    } else {
+      this.logger.warn(`[${tenantLabel}] Using JSON schema fallback (DB not connected or introspection failed)`);
+    }
+
+    // ── Log schema compression stats ─────────────────────────────────────
+    if (modulePrefixes.length > 0) {
+      const raw    = this.schemaService.getRawStats(modulePrefixes);
+      const tokens = this.schemaService.estimateTokens(schemaContext);
+      // Rough full-DDL estimate: avg 60 chars per column in DDL format
+      const fullDdlEstimate = Math.ceil((raw.columns * 60) / 4);
+      const savingPct = fullDdlEstimate > 0
+        ? Math.round((1 - tokens / fullDdlEstimate) * 100)
+        : 0;
+      this.logger.log(
+        `[${tenantLabel}] Schema: ~${tokens} tokens sent` +
+        ` (full DDL est. ~${fullDdlEstimate} tokens — ${savingPct}% savings)` +
+        ` | ${raw.tables} total tables, ${raw.columns} total cols in KB`,
+      );
+    }
 
     // 6. ── Optimization 3: Model Routing ──────────────────────────────────
     const model = this.selectModel(question, modulePrefixes.length);
@@ -123,32 +776,45 @@ export class QueryService {
 
     // 7. Stream from Claude with all optimizations
     let fullText = '';
-    let sqlExecuted = false;
+    const executedSqlBlocks = new Set<string>(); // tracks 'SQL', 'SQL_1', 'SQL_2', etc.
 
     try {
       // ── Optimization 1: Prompt Caching on system + schema ─────────────
       const stream = await this.anthropic.messages.stream({
         model,
-        max_tokens: 2048,
+        max_tokens: 1200,
         system: [{
           type: 'text',
-          text: SYSTEM_PROMPT,
+          text: buildSystemPrompt(),   // dynamic: injects today's real date
           cache_control: { type: 'ephemeral' },
         }] as any,
-        messages: [{
-          role: 'user',
-          content: [
-            {
-              type: 'text',
-              text: schemaContext,
-              cache_control: { type: 'ephemeral' },
-            },
-            {
-              type: 'text',
-              text: `Pregunta: ${question}\n\nGenera SQL T-SQL entre [SQL] y [/SQL] e interpreta los resultados en español.`,
-            },
-          ] as any,
-        }],
+        messages: [
+          // ── Conversation history: last 6 messages for follow-up context ──
+          // Strip internal markers ([SQL], [FOLLOWUPS]) before sending to Claude
+          ...((history ?? [])
+            .slice(-6)
+            .map((h) => ({
+              role: h.role,
+              content: this.stripMarkers(h.content).slice(0, 600),
+            }))
+            .filter((h) => h.content.length > 0)
+          ),
+          // ── Current question with schema context ────────────────────────
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: schemaContext,
+                cache_control: { type: 'ephemeral' },
+              },
+              {
+                type: 'text',
+                text: `Pregunta: ${question}\n\nGenera SQL T-SQL entre [SQL] y [/SQL] (o [SQL_1]/[SQL_2]/[SQL_3] para análisis multi-dimensional) e interpreta los resultados en español.`,
+              },
+            ] as any,
+          },
+        ],
       });
 
       // ── Optimization 5: Log token usage for cost monitoring ───────────
@@ -162,20 +828,37 @@ export class QueryService {
         }
       });
 
+      // Track last visible text length to diff-stream only new visible chars.
+      // This correctly handles [SQL] and [FOLLOWUPS] markers regardless of how
+      // Claude splits them across delta chunks.
+      let lastVisibleLen = 0;
+
       for await (const event of stream as AsyncIterable<MessageStreamEvent>) {
         if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-          const delta = event.delta.text;
-          fullText += delta;
+          fullText += event.delta.text;
 
-          if (!this.isInsideSqlBlock(fullText)) {
-            yield { type: 'delta', delta };
+          // Compute what the user should see: strip SQL blocks and FOLLOWUPS.
+          // Supports both [SQL]...[/SQL] and [SQL_N]...[/SQL_N] (multi-query).
+          // Incomplete blocks (still streaming) are suppressed by the open-ended regexes.
+          const visible = fullText
+            .replace(/\[SQL(?:_\d+)?\][\s\S]*?\[\/SQL(?:_\d+)?\]/g, '')  // complete blocks
+            .replace(/\[SQL(?:_\d+)?\][\s\S]*/g, '')                       // suppress incomplete block
+            .replace(/\[FOLLOWUPS\][\s\S]*/g, '');                          // suppress FOLLOWUPS onward
+
+          // Yield only the newly visible characters since the last yield
+          if (visible.length > lastVisibleLen) {
+            yield { type: 'delta', delta: visible.slice(lastVisibleLen) };
+            lastVisibleLen = visible.length;
           }
 
-          if (!sqlExecuted && fullText.includes('[/SQL]')) {
-            const match = fullText.match(/\[SQL\]([\s\S]*?)\[\/SQL\]/);
-            if (match) {
-              sqlExecuted = true;
-              const execResult = await this.executeSQL(match[1].trim(), tenantInfo);
+          // Execute all completed SQL blocks (single or numbered) not yet executed
+          const sqlBlockRegex = /\[(SQL(?:_\d+)?)\]([\s\S]*?)\[\/(?:SQL(?:_\d+)?)\]/g;
+          let sqlMatch: RegExpExecArray | null;
+          while ((sqlMatch = sqlBlockRegex.exec(fullText)) !== null) {
+            const blockTag = sqlMatch[1]; // 'SQL', 'SQL_1', 'SQL_2', 'SQL_3'
+            if (!executedSqlBlocks.has(blockTag)) {
+              executedSqlBlocks.add(blockTag);
+              const execResult = await this.executeSQL(sqlMatch[2].trim(), tenantInfo);
               if (execResult) yield { type: 'result', result: execResult };
             }
           }
@@ -192,12 +875,19 @@ export class QueryService {
   }
 
   // ── Optimization 3: Model routing ────────────────────────────────────────
+  // Models are configurable via env vars so they can be updated without code changes
+  // when Anthropic releases new versions or deprecates old ones.
+  // Default values are the latest stable models verified at the time of this release.
+  private readonly MODEL_FAST   = process.env.CLAUDE_MODEL_FAST   ?? 'claude-haiku-4-5';
+  private readonly MODEL_SMART  = process.env.CLAUDE_MODEL_SMART  ?? 'claude-sonnet-4-5';
+
   private selectModel(question: string, moduleCount: number): string {
-    const isSimple =
-      moduleCount === 1 &&
-      question.split(' ').length < 15 &&
-      !/comparar|vs\.?|versus|tendencia|período|evoluci|ranking|top\s*\d/i.test(question);
-    return isSimple ? 'claude-haiku-4-5' : 'claude-sonnet-4-5';
+    // Use Sonnet ONLY for genuinely complex multi-dimensional analysis.
+    // Everything else uses Haiku (3-5x faster, same SQL quality for standard queries).
+    const needsSonnet =
+      moduleCount >= 3 ||
+      /\bversus\b|año\s+a\s+año|tendencia\s+\d|proyecci|forecas|correlaci/i.test(question);
+    return needsSonnet ? this.MODEL_SMART : this.MODEL_FAST;
   }
 
   /** Demo mode: simulate Claude streaming with realistic ERP responses */
@@ -261,10 +951,14 @@ export class QueryService {
     return new Promise((r) => setTimeout(r, ms));
   }
 
-  private isInsideSqlBlock(text: string): boolean {
-    const sqlStart = text.lastIndexOf('[SQL]');
-    const sqlEnd = text.lastIndexOf('[/SQL]');
-    return sqlStart !== -1 && sqlStart > sqlEnd;
+  /** Strip internal markers from a message before using it as conversation history */
+  private stripMarkers(text: string): string {
+    return text
+      .replace(/\[SQL\][\s\S]*?\[\/SQL\]/g, '')
+      .replace(/\[FOLLOWUPS\][\s\S]*?\[\/FOLLOWUPS\]/g, '')
+      .replace(/\[FOLLOWUPS\][\s\S]*/g, '') // handle incomplete block
+      .replace(/Consultando la base de datos\.\.\.\n\n?/g, '')
+      .trim();
   }
 
   private async executeSQL(rawSql: string, tenant: TenantConnectionInfo | null = null): Promise<QueryResult | null> {
@@ -302,21 +996,145 @@ export class QueryService {
     }
   }
 
+  /**
+   * Query the live SQL Server schema for the given module prefixes.
+   * Returns a compact schema context string, or null if unavailable.
+   * Falls back gracefully so JSON-based schema is used instead.
+   */
+  private async getLiveSchemaContext(
+    prefixes: string[],
+    tenant: TenantConnectionInfo | null,
+  ): Promise<string | null> {
+    // Only allow safe uppercase module prefixes to prevent SQL injection
+    const safePrefixes = prefixes.filter((p) => /^[A-Z]{2,5}$/.test(p));
+    if (safePrefixes.length === 0) return null;
+
+    // Check cache first — avoids re-querying INFORMATION_SCHEMA on every request
+    const cacheKey = `${tenant?.id ?? 'demo'}:${safePrefixes.sort().join(',')}`;
+    const cached = this.schemaCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      this.logger.log(`Live schema cache HIT for [${safePrefixes.join(',')}]`);
+      return cached.context;
+    }
+
+    try {
+      const rows = await this.databaseService.introspectModuleTables(tenant, safePrefixes);
+      if (!rows.length) return null;
+
+      const tableMap = new Map<string, string[]>();
+      for (const row of rows) {
+        const tname = row['TABLE_NAME'] as string;
+        const col   = row['COLUMN_NAME'] as string;
+        const type  = this.dbTypeToCompact(
+          row['DATA_TYPE'] as string,
+          row['CHARACTER_MAXIMUM_LENGTH'] as number | null,
+          row['NUMERIC_PRECISION'] as number | null,
+          row['NUMERIC_SCALE'] as number | null,
+        );
+        // Enrich with human-readable title from GeneXus KB (92% coverage)
+        const title = this.schemaService.getAttributeTitle(col);
+        const colDef = title
+          ? `${col}:${type}(${title.replace(/\s+/g, '_')})`
+          : `${col}:${type}`;
+        if (!tableMap.has(tname)) tableMap.set(tname, []);
+        tableMap.get(tname)!.push(colDef);
+      }
+
+      const now    = new Date();
+      const yyyymm = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
+      const lines = [
+        '-- I-NET ERP (SQL Server) — Schema en vivo',
+        `-- FECHA HOY: ${now.toISOString().slice(0, 10)} | MES ACTUAL: ${yyyymm} | AÑO: ${now.getFullYear()}`,
+        '-- Fechas DATETIME: usa YEAR()/MONTH()/DATEADD() normalmente',
+        `-- Fechas CHAR(6) YYYYMM (ej: COMANOMES INT): WHERE campo = ${yyyymm}  (sin comillas si es INT)`,
+        `-- Fechas CHAR(8) YYYYMMDD: WHERE LEFT(campo,6) = '${yyyymm}'`,
+        '',
+      ];
+      for (const [tname, cols] of tableMap) {
+        // Add table description from GeneXus KB if available
+        const tableDesc = this.schemaService.getTableDescription(tname);
+        lines.push(tableDesc ? `[${tname}] -- ${tableDesc}` : `[${tname}]`);
+        lines.push(`  ${cols.join(' ')}`);
+      }
+      const result = lines.join('\n');
+
+      // Evict expired entries before adding new ones to keep the cache bounded
+      if (this.schemaCache.size >= this.SCHEMA_CACHE_MAX_SIZE) {
+        const now = Date.now();
+        for (const [k, v] of this.schemaCache) {
+          if (v.expiresAt <= now) this.schemaCache.delete(k);
+        }
+        // If still over limit, evict the first (oldest) entry
+        if (this.schemaCache.size >= this.SCHEMA_CACHE_MAX_SIZE) {
+          const firstKey = this.schemaCache.keys().next().value;
+          if (firstKey) this.schemaCache.delete(firstKey);
+        }
+      }
+
+      this.schemaCache.set(cacheKey, { context: result, expiresAt: Date.now() + this.SCHEMA_CACHE_TTL_MS });
+      this.logger.log(`Live schema: ${tableMap.size} tables for [${safePrefixes.join(',')}] — cached 15min`);
+      return result;
+    } catch (err) {
+      this.logger.warn('Live schema introspection failed — falling back to JSON schema', err);
+      return null;
+    }
+  }
+
+  private dbTypeToCompact(
+    type: string,
+    len: number | null,
+    prec: number | null,
+    scale: number | null,
+  ): string {
+    const t = (type ?? '').toLowerCase();
+    if (t === 'int' || t === 'bigint' || t === 'smallint' || t === 'tinyint') return 'INT';
+    if (t === 'bit') return 'BIT';
+    if (t === 'decimal' || t === 'numeric') return scale ? `N${prec}.${scale}` : `N${prec ?? ''}`;
+    if (t === 'char') return `C${len ?? ''}`;
+    if (t === 'varchar' || t === 'nvarchar') return `VC${len ?? 'MAX'}`;
+    if (t === 'nchar') return `NC${len ?? ''}`;
+    if (t === 'date') return 'DATE';
+    if (t === 'datetime' || t === 'datetime2' || t === 'smalldatetime') return 'DATETIME';
+    if (t === 'float' || t === 'real') return 'FLOAT';
+    if (t === 'money' || t === 'smallmoney') return 'MONEY';
+    if (t === 'text' || t === 'ntext') return 'TEXT';
+    return type.toUpperCase();
+  }
+
   private inferColType(name: string, dbType: string): string {
     const n = name.toLowerCase();
-    if (/monto|total|valor|precio|costo|saldo|importe|deuda/.test(n)) return 'currency';
-    if (/fecha|fch|date/.test(n)) return 'date';
-    if (/cantidad|cant|num|cnt|count/.test(n)) return 'number';
-    if (dbType.toLowerCase().includes('int') || dbType.toLowerCase().includes('decimal')) return 'number';
+    const t = dbType.toLowerCase();
+    // 1. Identifiers — look numeric but must stay as strings (RUT, codes)
+    if (/\brut\b|rut$|^rut|codigo|^cod$|cod_|_cod$|sucursal$/.test(n)) return 'string';
+    // 2. Years and months — no thousands-separator (2025 → never "2.025")
+    if (/^a[nñ]io$|^year$|^anio$|^mes$|^month$/.test(n)) return 'string';
+    // 3. Count / quantity columns — MUST come before currency check.
+    //    "DocumentosVenta" contains "venta" but is a COUNT → must be 'number', not 'currency'
+    if (/cantidad|cant\b|cnt\b|count\b|n[uú]mero\s*de|^num\b|^nro\b|documentos|registros|lineas|items|unidades/.test(n)) return 'number';
+    // 4. Currency — detect by name keywords OR by SQL Server money types
+    if (/monto|total|valor|precio|costo|saldo|importe|deuda|venta|neto|bruto|neta|bruta|ingreso|margen|iva|descuento|recargo|comision/.test(n)) return 'currency';
+    if (t === 'money' || t === 'smallmoney') return 'currency';
+    // 5. Dates
+    if (/fecha|fch|date/.test(n) || t === 'datetime' || t === 'date') return 'date';
+    // 6. Generic integers
+    if (t === 'int' || t === 'bigint' || t === 'smallint' || t === 'tinyint') return 'number';
+    if (t.includes('decimal') || t.includes('numeric') || t.includes('float')) return 'number';
     return 'string';
   }
 
   private inferChartConfig(rows: Record<string, unknown>[], cols: ColumnDef[]): ChartConfig | undefined {
     if (rows.length < 2 || rows.length > 50) return undefined;
-    const numCols = cols.filter((c) => c.type === 'number' || c.type === 'currency');
-    const strCols = cols.filter((c) => c.type === 'string');
-    if (numCols.length >= 1 && strCols.length >= 1) {
-      return { type: 'bar', xKey: strCols[0].key, yKey: numCols[0].key, yLabel: numCols[0].label };
+    // Prefer currency columns over plain numbers as the Y axis
+    const currencyCols = cols.filter((c) => c.type === 'currency');
+    const numCols      = cols.filter((c) => c.type === 'number');
+    const strCols      = cols.filter((c) => c.type === 'string');
+    // X axis: first string column that is NOT a RUT/code (avoid numeric-looking strings)
+    const xCol = strCols[0];
+    // Y axis: first currency column, fallback to first numeric
+    const yCol = currencyCols[0] ?? numCols[0];
+    if (xCol && yCol) {
+      const chartType = rows.length <= 12 ? 'bar' : 'line';
+      return { type: chartType, xKey: xCol.key, yKey: yCol.key, yLabel: yCol.label };
     }
     return undefined;
   }
@@ -329,13 +1147,6 @@ export class QueryService {
     } catch {
       return [];
     }
-  }
-
-  private cleanResponse(text: string): string {
-    return text
-      .replace(/\[SQL\][\s\S]*?\[\/SQL\]/g, '')
-      .replace(/\[FOLLOWUPS\][\s\S]*?\[\/FOLLOWUPS\]/g, '')
-      .trim();
   }
 
   /** Mock result when DB is not connected (for development) */

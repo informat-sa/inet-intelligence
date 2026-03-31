@@ -15,10 +15,16 @@ import { JwtStrategy } from './strategies/jwt.strategy';
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
       imports: [ConfigModule],
-      useFactory: (config: ConfigService) => ({
-        secret:       config.get<string>('JWT_SECRET') ?? 'inet-intelligence-dev-secret',
-        signOptions:  { expiresIn: (config.get<string>('JWT_EXPIRES_IN') ?? '8h') as any },
-      }),
+      useFactory: (config: ConfigService) => {
+        const secret = config.get<string>('JWT_SECRET');
+        if (!secret && process.env.NODE_ENV === 'production') {
+          throw new Error('FATAL: JWT_SECRET no está configurado. El servidor no puede arrancar en producción sin un secreto JWT.');
+        }
+        return {
+          secret:      secret ?? 'inet-dev-only-secret-not-for-production',
+          signOptions: { expiresIn: (config.get<string>('JWT_EXPIRES_IN') ?? '8h') as any },
+        };
+      },
       inject: [ConfigService],
     }),
   ],

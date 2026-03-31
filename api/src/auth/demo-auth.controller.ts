@@ -3,7 +3,7 @@
  * Accepts any credentials and returns a real signed JWT with all modules.
  * Includes two demo "empresas" so the multi-company selector can be demoed.
  */
-import { Controller, Post, Body, Get, Req } from '@nestjs/common';
+import { Controller, Post, Body, Get, Req, Query, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Public } from './decorators/public.decorator';
 import type { JwtPayload } from './interfaces/jwt-payload.interface';
@@ -35,6 +35,17 @@ export class DemoAuthController {
   @Public()
   @Post('login')
   login(@Body() body: { email?: string; password?: string }) {
+    // SECURITY: This controller is only loaded when PG_HOST is not configured.
+    // It must ONLY accept logins when DEMO_MODE is explicitly set to "true".
+    // Without this check, a misconfigured production deployment (PG_HOST missing
+    // but DEMO_MODE not set) would accept any credentials — a critical backdoor.
+    if (process.env.DEMO_MODE !== 'true') {
+      throw new UnauthorizedException(
+        'El sistema no está configurado correctamente. ' +
+        'Contacta al administrador (PG_HOST no configurado).'
+      );
+    }
+
     const email  = body.email ?? 'demo@informat.cl';
     const name   = email.split('@')[0]
       .replace(/\./g, ' ')
@@ -131,7 +142,7 @@ export class DemoAuthController {
   /** Validate reset token — demo mode */
   @Public()
   @Get('reset-password/validate')
-  validateResetToken(@Body() body: { token?: string }) {
-    return { valid: body.token === 'demo-reset-token' };
+  validateResetToken(@Query('token') token?: string) {
+    return { valid: token === 'demo-reset-token' };
   }
 }

@@ -33,7 +33,7 @@ export function ResultChart({ result }: Props) {
   return (
     <div className="mt-3 bg-white dark:bg-slate-800/50 rounded-xl border border-slate-100
                     dark:border-slate-700 p-4">
-      <ResponsiveContainer width="100%" height={260}>
+      <ResponsiveContainer width="100%" height={typeof window !== "undefined" && window.innerWidth < 640 ? 200 : 260}>
         {type === "bar" ? (
           <BarChart {...commonProps}>
             <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />

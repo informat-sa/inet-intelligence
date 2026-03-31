@@ -220,9 +220,9 @@ export class AuthService {
 
   /** Validate invite token and return user */
   async validateInviteToken(token: string): Promise<User | null> {
-    const user = await this.usersService.findById(token);
+    const user = await this.usersService.findByInviteToken(token);
     if (!user) return null;
-    if (user.inviteExpiresAt < new Date()) return null;
+    if (!user.inviteExpiresAt || user.inviteExpiresAt < new Date()) return null;
     return user;
   }
 

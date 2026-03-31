@@ -11,14 +11,16 @@ dotenv.config();
 import { Module }                          from '@nestjs/common';
 import { ConfigModule, ConfigService }     from '@nestjs/config';
 import { TypeOrmModule }                   from '@nestjs/typeorm';
-import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ThrottlerModule }              from '@nestjs/throttler';
+import { UserThrottlerGuard }          from './common/user-throttler.guard';
 import { APP_GUARD }                       from '@nestjs/core';
 
 import { DemoAuthModule }  from './auth/demo-auth.module';
 import { AuthModule }      from './auth/auth.module';
 import { UsersModule }     from './users/users.module';
 import { TenantsModule }   from './tenants/tenants.module';
-import { FavoritesModule } from './favorites/favorites.module';
+import { FavoritesModule }       from './favorites/favorites.module';
+import { ConversationsModule }   from './conversations/conversations.module';
 import { MailModule }      from './mail/mail.module';
 import { JwtAuthGuard }    from './auth/guards/jwt-auth.guard';
 
@@ -34,6 +36,8 @@ import { User }                 from './users/entities/user.entity';
 import { UserModulePermission } from './users/entities/user-module-permission.entity';
 import { UserTenantAccess }     from './users/entities/user-tenant-access.entity';
 import { Favorite }             from './favorites/entities/favorite.entity';
+import { Conversation }         from './conversations/entities/conversation.entity';
+import { ConversationMessage }  from './conversations/entities/conversation-message.entity';
 
 // ── Decide whether to use PostgreSQL ────────────────────────────────────────
 // dotenv.config() was called above so process.env has values from .env file
@@ -50,7 +54,7 @@ const pgImports = HAS_PG
           database:    config.get<string>('PG_DATABASE') ?? 'inet_intelligence',
           username:    config.get<string>('PG_USER')     ?? 'postgres',
           password:    config.get<string>('PG_PASSWORD') ?? '',
-          entities:    [Tenant, User, UserModulePermission, UserTenantAccess, Favorite],
+          entities:    [Tenant, User, UserModulePermission, UserTenantAccess, Favorite, Conversation, ConversationMessage],
           synchronize: config.get<string>('NODE_ENV') !== 'production',
           ssl:         config.get<string>('PG_SSL') === 'true'
                          ? { rejectUnauthorized: false }
@@ -64,6 +68,7 @@ const pgImports = HAS_PG
       UsersModule,
       AuthModule,
       FavoritesModule,
+      ConversationsModule,
     ]
   : [
       // No PostgreSQL configured — demo mode uses in-memory JWT auth only
@@ -73,7 +78,12 @@ const pgImports = HAS_PG
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
-    ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 30 }]),
+    ThrottlerModule.forRoot([
+      // General: 60 requests per minute per user (all endpoints)
+      { name: 'default', ttl: 60_000, limit: 60 },
+      // Burst protection: max 5 requests per 10 seconds per user
+      { name: 'burst',   ttl: 10_000, limit: 5  },
+    ]),
     ...pgImports,
   ],
   controllers: [QueryController, SchemaController, HealthController],
@@ -83,8 +93,8 @@ const pgImports = HAS_PG
     QueryService,
     // Global JWT guard — @Public() routes bypass it
     { provide: APP_GUARD, useClass: JwtAuthGuard },
-    // Global rate limiter
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    // Global rate limiter — per user ID, not per IP
+    { provide: APP_GUARD, useClass: UserThrottlerGuard },
   ],
 })
 export class AppModule {}

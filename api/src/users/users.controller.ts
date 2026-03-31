@@ -25,7 +25,7 @@ const MODULE_NAMES: Record<string, string> = {
 
 class InviteUserDto {
   @IsEmail() email: string;
-  @IsString() @MinLength(2) name: string;
+  @IsOptional() @IsString() name?: string;
   @IsArray() @IsString({ each: true }) modulePermissions: string[];
 }
 
@@ -51,14 +51,21 @@ export class UsersController {
     if (!me.tenantId) return [];
     const users = await this.usersService.findByTenant(me.tenantId);
     return users.map((u) => ({
-      id:          u.id,
-      name:        u.name,
-      email:       u.email,
-      role:        u.role,
-      isActive:    u.isActive,
-      lastLoginAt: u.lastLoginAt,
-      isPending:   !u.isActive && !!u.inviteToken,
-      modules:     u.modulePermissions.filter(p => p.enabled).map(p => p.modulePrefix),
+      id:               u.id,
+      name:             u.name,
+      email:            u.email,
+      role:             u.role,
+      isActive:         u.isActive,
+      lastLoginAt:      u.lastLoginAt,
+      createdAt:        u.createdAt,
+      // inviteToken is returned as a non-null marker ("*") when pending — actual token stays secret
+      inviteToken:      u.inviteToken ? '*' : undefined,
+      inviteExpiresAt:  u.inviteExpiresAt,
+      // modulePermissions in the shape the frontend expects
+      modulePermissions: u.modulePermissions.map((p) => ({
+        modulePrefix: p.modulePrefix,
+        enabled:      p.enabled,
+      })),
     }));
   }
 
@@ -103,7 +110,7 @@ export class UsersController {
 
     const newUser = await this.usersService.createInvite({
       email:             dto.email,
-      name:              dto.name,
+      name:              dto.name ?? '',
       tenantId:          me.tenantId,
       invitedByUserId:   me.sub,
       modulePermissions: dto.modulePermissions,
@@ -119,7 +126,7 @@ export class UsersController {
 
     await this.mailService.sendInviteEmail({
       to:          dto.email,
-      toName:      dto.name,
+      toName:      dto.name ?? dto.email,
       adminName:   me.tenantName ?? 'El administrador',
       tenantName:  tenant?.name ?? 'su empresa',
       modulesList,
@@ -127,7 +134,19 @@ export class UsersController {
     });
 
     this.logger.log(`User invited: ${dto.email} by ${me.email}`);
-    return { success: true, userId: newUser.id };
+
+    // Return a PortalUser-shaped object so the frontend can add it to the list immediately
+    return {
+      id:                newUser.id,
+      name:              newUser.name,
+      email:             newUser.email,
+      role:              newUser.role,
+      isActive:          newUser.isActive,
+      inviteToken:       '*',   // marker: pending invite (actual token stays secret)
+      inviteExpiresAt:   newUser.inviteExpiresAt,
+      createdAt:         newUser.createdAt,
+      modulePermissions: dto.modulePermissions.map((m) => ({ modulePrefix: m, enabled: true })),
+    };
   }
 
   @Roles('admin', 'super_admin')

@@ -93,7 +93,7 @@ export function UserTable({ users, onUpdate }: Props) {
                 <div className="flex items-center gap-3">
                   <div className="w-8 h-8 rounded-full bg-gradient-to-br from-brand-blue to-brand-navy
                                   flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
-                    {(u.name?.[0] ?? u.email[0]).toUpperCase()}
+                    {(u.name?.[0] ?? u.email?.[0] ?? '?').toUpperCase()}
                   </div>
                   <div>
                     <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">

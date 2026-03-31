@@ -126,3 +126,49 @@
   animation: blink 1s step-end infinite;
   @apply text-brand-blue ml-0.5;
 }
+
+/* ── Mobile: dynamic viewport height ──────────────────────────────────────
+   dvh adapts when the browser chrome (URL bar, keyboard) appears/disappears.
+   Fallback to 100vh for browsers that don't support dvh yet.              */
+.h-screen-mobile {
+  height: 100vh;
+  height: 100dvh;
+}
+
+/* ── Mobile: sidebar drawer overlay ────────────────────────────────────── */
+.sidebar-overlay {
+  @apply fixed inset-0 bg-black/40 backdrop-blur-sm z-40;
+}
+
+/* ── Mobile: message bubbles max-width override ─────────────────────────── */
+@media (max-width: 640px) {
+  .message-user {
+    @apply max-w-[88%] px-4 py-3 text-[15px] leading-relaxed;
+  }
+  .message-ai {
+    @apply max-w-[92%] px-4 py-3 text-[15px] leading-relaxed;
+  }
+  /* Prose chat readable on small screens */
+  .prose-chat {
+    @apply text-[15px] leading-relaxed;
+  }
+  /* Table horizontal scroll hint */
+  .table-scroll-hint::after {
+    content: "";
+    @apply block w-8 h-full absolute right-0 top-0
+           bg-gradient-to-l from-white dark:from-slate-900 to-transparent pointer-events-none;
+  }
+}
+
+/* ── Mobile: prevent tap highlight on buttons ─────────────────────────── */
+@media (max-width: 768px) {
+  button, a {
+    -webkit-tap-highlight-color: transparent;
+  }
+  /* Ensure minimum touch target for interactive elements */
+  .touch-target {
+    min-height: 44px;
+    min-width: 44px;
+    @apply flex items-center justify-center;
+  }
+}

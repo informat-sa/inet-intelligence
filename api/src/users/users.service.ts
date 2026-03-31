@@ -34,6 +34,13 @@ export class UsersService {
     });
   }
 
+  async findByInviteToken(token: string): Promise<User | null> {
+    return this.userRepo.findOne({
+      where: { inviteToken: token },
+      relations: ['tenant', 'modulePermissions'],
+    });
+  }
+
   async findByTenant(tenantId: string): Promise<User[]> {
     return this.userRepo.find({
       where: { tenantId },
@@ -83,7 +90,7 @@ export class UsersService {
   /** Generate invite token, save user as pending activation */
   async createInvite(data: {
     email: string;
-    name: string;
+    name?: string;
     tenantId: string;
     invitedByUserId: string;
     modulePermissions: string[];
@@ -95,7 +102,7 @@ export class UsersService {
     const inviteExpiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000); // 48h
 
     const user = this.userRepo.create({
-      name: data.name,
+      name: data.name ?? '',     // empty until accepted (user sets name on accept)
       email: data.email.toLowerCase(),
       passwordHash: '',          // empty until accept
       role: UserRole.USER,
@@ -125,8 +132,8 @@ export class UsersService {
       name,
       passwordHash,
       isActive: true,
-      inviteToken: undefined as any,
-      inviteExpiresAt: undefined as any,
+      inviteToken: null as any,       // NULL so the token can't be replayed
+      inviteExpiresAt: null as any,
     });
     return this.findById(user.id) as Promise<User>;
   }

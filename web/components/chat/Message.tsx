@@ -85,46 +85,75 @@ export function Message({ message, onFollowUp, userQuestion, onSaveFavorite }: P
           )}
         </div>
 
-        {/* Result table */}
-        {!isUser && message.result?.type === "table" && (
-          <div className="w-full max-w-3xl">
-            <ResultTable result={message.result} />
+        {/* Multi-query results (SQL_1, SQL_2, SQL_3) */}
+        {!isUser && message.results && message.results.length > 1 && (
+          <div className="w-full max-w-3xl space-y-4">
+            {message.results.map((res, idx) => (
+              <div key={idx}>
+                {res.type === "table" && <ResultTable result={res} exportTitle={userQuestion} />}
+                {res.chartConfig && <ResultChart result={res} />}
+              </div>
+            ))}
           </div>
         )}
 
-        {/* Result chart */}
-        {!isUser && message.result?.type === "chart" && (
-          <div className="w-full max-w-2xl">
+        {/* Single result table (legacy / [SQL] blocks) */}
+        {!isUser && !message.results && message.result?.type === "table" && (
+          <div className="w-full max-w-3xl">
+            <ResultTable result={message.result} exportTitle={userQuestion} />
+          </div>
+        )}
+
+        {/* Single result chart (legacy / [SQL] blocks) */}
+        {!isUser && !message.results && message.result?.chartConfig && (
+          <div className="w-full max-w-3xl">
             <ResultChart result={message.result} />
           </div>
         )}
 
-        {/* SQL viewer */}
-        {!isUser && message.result?.sql && (
-          <div className="w-full max-w-3xl">
-            <button
-              onClick={() => setShowSql(!showSql)}
-              className="flex items-center gap-1.5 text-[11px] text-slate-400 hover:text-brand-blue
-                         transition-colors mt-1"
-            >
-              <Code2 className="w-3 h-3" />
-              {showSql ? "Ocultar SQL" : "Ver SQL generado"}
-              {showSql ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-            </button>
-            {showSql && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: "auto" }}
-                exit={{ opacity: 0, height: 0 }}
-                className="mt-2 bg-slate-900 rounded-xl p-4 overflow-x-auto"
+        {/* SQL viewer — shows all SQL blocks (multi-query) or the single one */}
+        {!isUser && (() => {
+          const sqlList = message.results
+            ? message.results.filter(r => r.sql).map(r => r.sql!)
+            : message.result?.sql
+              ? [message.result.sql]
+              : [];
+          if (sqlList.length === 0) return null;
+          return (
+            <div className="w-full max-w-3xl">
+              <button
+                onClick={() => setShowSql(!showSql)}
+                className="flex items-center gap-1.5 text-[11px] text-slate-400 hover:text-brand-blue
+                           transition-colors mt-1"
               >
-                <pre className="text-xs text-slate-100 font-mono whitespace-pre-wrap">
-                  {message.result.sql}
-                </pre>
-              </motion.div>
-            )}
-          </div>
-        )}
+                <Code2 className="w-3 h-3" />
+                {showSql ? "Ocultar SQL" : `Ver SQL generado${sqlList.length > 1 ? ` (${sqlList.length} consultas)` : ""}`}
+                {showSql ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+              </button>
+              {showSql && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: "auto" }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="mt-2 space-y-2"
+                >
+                  {sqlList.map((sql, idx) => (
+                    <div key={idx} className="bg-slate-900 rounded-xl p-4 overflow-x-auto">
+                      {sqlList.length > 1 && (
+                        <p className="text-[10px] text-slate-500 mb-2 font-mono">
+                          — Consulta {idx + 1} —
+                        </p>
+                      )}
+                      <pre className="text-xs text-slate-100 font-mono whitespace-pre-wrap">
+                        {sql}
+                      </pre>
+                    </div>
+                  ))}
+                </motion.div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Follow-up suggestions */}
         {!isUser && isDone && message.suggestedFollowUps && message.suggestedFollowUps.length > 0 && (
@@ -200,7 +229,8 @@ export function Message({ message, onFollowUp, userQuestion, onSaveFavorite }: P
                 saved
                   ? "text-amber-500"
                   : "text-slate-300 dark:text-slate-600 hover:text-amber-500 dark:hover:text-amber-400",
-                "opacity-0 group-hover:opacity-100"
+                // Mobile: always visible (no hover on touch). Desktop: show on hover only.
+                "opacity-100 md:opacity-0 md:group-hover:opacity-100"
               )}
             >
               <Star className={cn("w-3 h-3", saved && "fill-amber-500")} />

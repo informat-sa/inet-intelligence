@@ -20,12 +20,17 @@ export interface QueryExecutionResult {
   executionMs: number;
 }
 
+// Hard limit: prevents 100 tenants × 5 connections = 500 simultaneous SQL Server connections.
+// When the limit is reached, the least-recently-used pool is closed and evicted.
+const MAX_TENANT_POOLS = 20;
+
 @Injectable()
 export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(DatabaseService.name);
 
-  // Per-tenant pool registry (lazy creation)
-  private readonly pools = new Map<string, sql.ConnectionPool>();
+  // Per-tenant pool registry (lazy creation, LRU-bounded to MAX_TENANT_POOLS)
+  private readonly pools    = new Map<string, sql.ConnectionPool>();
+  private readonly poolsLRU = new Map<string, number>(); // tenantId → last access epoch ms
 
   // Demo/fallback pool (DEMO_MODE=true, uses env vars)
   private demoPool: sql.ConnectionPool | null = null;
@@ -77,15 +82,39 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Get or lazily create a dedicated pool for a tenant */
+  /** Get or lazily create a dedicated pool for a tenant (LRU-bounded) */
   async getPool(tenant: TenantConnectionInfo): Promise<sql.ConnectionPool> {
     const existing = this.pools.get(tenant.id);
-    if (existing?.connected) return existing;
+    if (existing?.connected) {
+      this.poolsLRU.set(tenant.id, Date.now()); // refresh LRU timestamp
+      return existing;
+    }
 
-    if (existing) this.pools.delete(tenant.id); // stale — recreate
+    if (existing) {
+      // Stale pool — close it before recreating
+      this.pools.delete(tenant.id);
+      this.poolsLRU.delete(tenant.id);
+      await existing.close().catch(() => {});
+    }
+
+    // Enforce pool cap: evict the least-recently-used pool if at limit
+    if (this.pools.size >= MAX_TENANT_POOLS) {
+      const lruEntry = [...this.poolsLRU.entries()].sort((a, b) => a[1] - b[1])[0];
+      if (lruEntry) {
+        const [evictId] = lruEntry;
+        const evictPool = this.pools.get(evictId);
+        this.pools.delete(evictId);
+        this.poolsLRU.delete(evictId);
+        await evictPool?.close().catch(() => {});
+        this.logger.warn(`Pool evicted (LRU cap=${MAX_TENANT_POOLS}) for tenant [${evictId}]`);
+      }
+    }
 
     const password = decryptPassword(tenant.dbPasswordEncrypted);
-    const pool = await sql.connect({
+
+    // Wrap sql.connect() with an AbortSignal-style timeout so a non-responding
+    // SQL Server never hangs the request indefinitely.
+    const connectPromise = sql.connect({
       server:   tenant.dbServer,
       database: tenant.dbDatabase,
       user:     tenant.dbUser,
@@ -95,18 +124,48 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         encrypt:                tenant.dbEncrypt,
         trustServerCertificate: tenant.dbTrustCert,
         enableArithAbort:       true,
-        connectTimeout:         30000,
+        connectTimeout:         15000,   // 15s to establish connection
       },
       pool: { max: 5, min: 0, idleTimeoutMillis: 60000 },
     });
+
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`Connection timeout for tenant [${tenant.id}] — SQL Server not responding`)), 20000)
+    );
+
+    const pool = await Promise.race([connectPromise, timeoutPromise]);
     this.pools.set(tenant.id, pool);
-    this.logger.log(`Pool created for tenant [${tenant.id}]: ${tenant.dbServer}/${tenant.dbDatabase}`);
+    this.poolsLRU.set(tenant.id, Date.now());
+    this.logger.log(`Pool created for tenant [${tenant.id}]: ${tenant.dbServer}/${tenant.dbDatabase} (pools active: ${this.pools.size})`);
     return pool;
   }
 
   isConnected(tenantId?: string): boolean {
     if (!tenantId) return this.demoConnected && this.demoPool?.connected === true;
     return this.pools.get(tenantId)?.connected === true;
+  }
+
+  /**
+   * Query INFORMATION_SCHEMA.COLUMNS filtered by table name prefixes.
+   * Used to build live schema context for Claude instead of relying on JSON files.
+   */
+  async introspectModuleTables(
+    tenant: TenantConnectionInfo | null,
+    prefixes: string[],
+  ): Promise<Record<string, unknown>[]> {
+    if (prefixes.length === 0) return [];
+    // prefixes are validated upstream to be [A-Z]{2,5} only — no injection risk
+    const likeFilters = prefixes.map((p) => `TABLE_NAME LIKE '${p}%'`).join(' OR ');
+    const sqlText = `
+      SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE,
+             CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = 'dbo'
+        AND (${likeFilters})
+      ORDER BY TABLE_NAME, ORDINAL_POSITION
+    `;
+    const result = await this.executeQuery(sqlText, tenant, 15000);
+    return result.rows;
   }
 
   /** Execute a validated read-only query for a tenant (or demo pool if tenant=null) */

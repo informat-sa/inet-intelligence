@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { generateId } from "@/lib/utils";
 import type { Message, Conversation, User, AccessibleTenant } from "@/types";
+import { listConversations, deleteConversationApi } from "@/lib/api";
 
 interface ChatStore {
   // Auth
@@ -25,6 +26,7 @@ interface ChatStore {
   addMessage: (conversationId: string, message: Message) => void;
   updateMessage: (conversationId: string, messageId: string, updates: Partial<Message>) => void;
   getMessages: (conversationId: string) => Message[];
+  loadConversationsFromBackend: () => Promise<void>;
 
   // Active module context — set when user picks a module from sidebar
   activeModule: string | null;  // e.g. "VFA" | null = all modules
@@ -35,6 +37,10 @@ interface ChatStore {
   toggleSidebar: () => void;
   isStreaming: boolean;
   setStreaming: (v: boolean) => void;
+
+  // Theme
+  theme: 'light' | 'dark';
+  toggleTheme: () => void;
 }
 
 export const useChatStore = create<ChatStore>()(
@@ -67,7 +73,9 @@ export const useChatStore = create<ChatStore>()(
 
       setActiveConversation: (id) => set({ activeConversationId: id }),
 
-      deleteConversation: (id) =>
+      deleteConversation: (id) => {
+        // Remove from backend (fire and forget)
+        deleteConversationApi(id).catch(() => {});
         set((s) => {
           const { [id]: _, ...rest } = s.messages;
           const convs = s.conversations.filter((c) => c.id !== id);
@@ -79,7 +87,8 @@ export const useChatStore = create<ChatStore>()(
                 ? convs[0]?.id ?? null
                 : s.activeConversationId,
           };
-        }),
+        });
+      },
 
       addMessage: (conversationId, message) =>
         set((s) => {
@@ -95,7 +104,10 @@ export const useChatStore = create<ChatStore>()(
                       ? message.content.slice(0, 60)
                       : c.title,
                   modulesUsed: Array.from(
-                    new Set([...c.modulesUsed, ...(message.result ? [] : [])])
+                    new Set([
+                      ...c.modulesUsed,
+                      ...(message.modulesUsed ?? []),
+                    ])
                   ),
                 }
               : c
@@ -115,6 +127,30 @@ export const useChatStore = create<ChatStore>()(
 
       getMessages: (conversationId) => get().messages[conversationId] ?? [],
 
+      loadConversationsFromBackend: async () => {
+        try {
+          const remoteConvs = await listConversations();
+          if (!remoteConvs.length) return;
+          const mapped: Conversation[] = remoteConvs.map((c) => ({
+            id:           c.id,
+            title:        c.title,
+            modulesUsed:  c.modulesUsed ?? [],
+            messageCount: c.messageCount,
+            createdAt:    new Date(c.createdAt),
+            updatedAt:    new Date(c.updatedAt),
+          }));
+          set((s) => {
+            // Merge: keep local messages cache, replace conversation list
+            // Local conversations not on backend are kept (they'll sync after next query)
+            const backendIds = new Set(mapped.map((c) => c.id));
+            const localOnly  = s.conversations.filter((c) => !backendIds.has(c.id));
+            return { conversations: [...mapped, ...localOnly] };
+          });
+        } catch {
+          // Backend not available — silent fail, local data stays intact
+        }
+      },
+
       activeModule: null,
       setActiveModule: (prefix) => set({ activeModule: prefix }),
 
@@ -122,6 +158,9 @@ export const useChatStore = create<ChatStore>()(
       toggleSidebar: () => set((s) => ({ isSidebarOpen: !s.isSidebarOpen })),
       isStreaming: false,
       setStreaming: (v) => set({ isStreaming: v }),
+
+      theme: 'light',
+      toggleTheme: () => set((s) => ({ theme: s.theme === 'light' ? 'dark' : 'light' })),
     }),
     {
       name: "inet-intelligence",
@@ -132,7 +171,14 @@ export const useChatStore = create<ChatStore>()(
         user:              s.user,
         activeModule:      s.activeModule,
         accessibleTenants: s.accessibleTenants,
+        theme:             s.theme,
+        // NOTE: isStreaming is intentionally NOT persisted so a closed
+        // browser tab never leaves the input permanently disabled on reopen.
       }),
+      // Ensure isStreaming always resets to false on hydration
+      onRehydrateStorage: () => (state) => {
+        if (state) state.isStreaming = false;
+      },
     }
   )
 );

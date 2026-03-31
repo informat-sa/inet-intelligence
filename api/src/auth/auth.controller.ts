@@ -1,5 +1,5 @@
 import {
-  Controller, Post, Get, Body, UnauthorizedException, Logger, NotFoundException,
+  Controller, Post, Get, Body, Query, UnauthorizedException, Logger, NotFoundException,
 } from '@nestjs/common';
 import { IsEmail, IsString, MinLength } from 'class-validator';
 import { AuthService } from './auth.service';
@@ -85,8 +85,9 @@ export class AuthController {
   /** Validate reset token without consuming it (used by the reset page to pre-check) */
   @Public()
   @Get('reset-password/validate')
-  async validateResetToken(@Body() body: { token: string }) {
-    const user = await this.usersService.findByResetToken(body.token);
+  async validateResetToken(@Query('token') token: string) {
+    if (!token) return { valid: false };
+    const user = await this.usersService.findByResetToken(token);
     return { valid: !!user };
   }
 

@@ -61,6 +61,16 @@ export interface Tenant {
   createdAt:      string;
 }
 
+/** Extended tenant with DB connection fields — returned by /tenants and /tenants/:id */
+export interface TenantDetail extends Tenant {
+  dbServer:   string;
+  dbPort:     number;
+  dbDatabase: string;
+  dbUser:     string;
+  dbEncrypt:  boolean;
+  updatedAt:  string;
+}
+
 // ─── Favorites ────────────────────────────────────────────────────────────────
 export interface Favorite {
   id:          string;
@@ -80,6 +90,8 @@ export interface Message {
   timestamp:         Date;
   status?:           MessageStatus;
   result?:           QueryResult;
+  results?:          QueryResult[];   // multi-query: [SQL_1], [SQL_2], [SQL_3]
+  modulesUsed?:      string[];
   suggestedFollowUps?: string[];
 }
 
