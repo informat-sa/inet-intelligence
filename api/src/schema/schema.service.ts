@@ -388,27 +388,20 @@ const REAL_SQL_TABLES: Record<string, Array<{ name: string; description: string;
     },
     {
       name: 'CONCOM',
-      description: 'Cabecera del comprobante / asiento contable',
+      description: 'Cabecera del comprobante contable (asiento). IMPORTANTE: COMEJE indica a qué ejercicio afecta; COMEJE=0 significa que afecta a TODOS los ejercicios existentes de la empresa. No existe JOIN directo por período — el período se determina usando COMEJE + ConLibAno a través del procesador de comprobantes.',
       attributes: [
-        { id: 'r_concmglo',  name: 'ConCmGlo',  title: 'Glosa del comprobante',                  type: 'string', length: 80, dec: 0, prefix: 'CON' },
-        { id: 'r_concmtip',  name: 'ConCmTip',  title: 'Tipo de comprobante',                    type: 'string', length:  3, dec: 0, prefix: 'CON' },
-        { id: 'r_concmfcre', name: 'ConCmFCre', title: 'Fecha de creación del asiento',          type: 'd',      length:  8, dec: 0, prefix: 'CON' },
-        { id: 'r_concmsit',  name: 'ConCmSit',  title: 'Situación: A=Activo, N=Anulado',         type: 'string', length:  1, dec: 0, prefix: 'CON' },
-        { id: 'r_conlibano', name: 'ConLibAno', title: 'Año del libro contable',                 type: 'n',      length:  4, dec: 0, prefix: 'CON' },
-        { id: 'r_conlibcor', name: 'ConLibCor', title: 'Correlativo / número del comprobante',   type: 'n',      length: 10, dec: 0, prefix: 'CON' },
+        { id: 'r_concmglo',  name: 'ConCmGlo',  title: 'Glosa del comprobante',                                                                type: 'string', length: 80, dec: 0, prefix: 'CON' },
+        { id: 'r_concmtip',  name: 'ConCmTip',  title: 'Tipo de comprobante',                                                                  type: 'string', length:  3, dec: 0, prefix: 'CON' },
+        { id: 'r_concmfcre', name: 'ConCmFCre', title: 'Fecha de creación del asiento',                                                        type: 'd',      length:  8, dec: 0, prefix: 'CON' },
+        { id: 'r_concmsit',  name: 'ConCmSit',  title: 'Situación: A=Activo, N=Anulado',                                                       type: 'string', length:  1, dec: 0, prefix: 'CON' },
+        { id: 'r_conlibano', name: 'ConLibAno', title: 'Año del libro contable',                                                               type: 'n',      length:  4, dec: 0, prefix: 'CON' },
+        { id: 'r_conlibcor', name: 'ConLibCor', title: 'Correlativo / número del comprobante',                                                 type: 'n',      length: 10, dec: 0, prefix: 'CON' },
+        { id: 'r_comeje',    name: 'COMEJE',    title: 'Ejercicio al que afecta el comprobante. 0=afecta a todos los ejercicios de la empresa', type: 'n',      length:  4, dec: 0, prefix: 'CON' },
       ],
     },
-    {
-      name: 'CONCOC',
-      description: 'Líneas del asiento contable (movimientos debe/haber)',
-      attributes: [
-        { id: 'r_cocglosa',  name: 'ConCmGlo',  title: 'FK glosa/ID del comprobante padre',      type: 'string', length: 80, dec: 0, prefix: 'CON' },
-        { id: 'r_cocplacod', name: 'PlaCod',    title: 'FK cuenta del plan de cuentas',          type: 'string', length:  9, dec: 0, prefix: 'CON' },
-        { id: 'r_conccsen',  name: 'ConCcSen',  title: 'Sentido: D=Debe, H=Haber',              type: 'string', length:  1, dec: 0, prefix: 'CON' },
-        { id: 'r_conccdeb',  name: 'ConCcPDeb', title: 'Monto al Debe (pesos CLP)',              type: 'n',      length: 15, dec: 2, prefix: 'CON' },
-        { id: 'r_conccphab', name: 'ConCcPHab', title: 'Monto al Haber (pesos CLP)',             type: 'n',      length: 15, dec: 2, prefix: 'CON' },
-      ],
-    },
+    // CONCOC EXCLUIDA: es una tabla de plantillas de ingreso de comprobantes.
+    // No contiene saldos ni movimientos contables reales. Confirmado por Verónica Leighton (INET).
+    // No usar en consultas sobre contabilidad, balances ni movimientos.
     {
       name: 'CONCOMCO',
       description: 'Correlativo de comprobantes contables por año y tipo',
