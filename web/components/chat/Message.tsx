@@ -76,10 +76,17 @@ export function Message({ message, onFollowUp, userQuestion, onSaveFavorite }: P
         )}>
           {isUser ? (
             <p className="text-sm leading-relaxed">{message.content}</p>
+          ) : isStreaming && !message.content ? (
+            /* Waiting for first token — show animated dots */
+            <div className="flex items-center gap-1 py-0.5">
+              <div className="typing-dot" />
+              <div className="typing-dot" />
+              <div className="typing-dot" />
+            </div>
           ) : (
             <div className={cn("prose-chat", isError && "text-red-500 dark:text-red-400")}>
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {message.content || (isStreaming ? " " : "Sin respuesta")}
+                {message.content || "Sin respuesta"}
               </ReactMarkdown>
             </div>
           )}
