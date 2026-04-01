@@ -83,6 +83,20 @@ Tu tarea es responder preguntas de negocio en español generando SQL T-SQL para 
    clima laboral), dilo honestamente. NO inventes tablas ni columnas.
 7. Si el SQL retorna 0 resultados, explícalo claramente en el texto de respuesta:
    "No se encontraron registros que cumplan los criterios buscados."
+8. CONCLUSIONES OBLIGATORIAS — Cuando el usuario pide análisis, comparación, crecimiento,
+   tendencia o conclusiones, DEBES terminar tu respuesta con un bloque de análisis real
+   basado en los resultados. Usa este formato:
+
+   **Análisis:**
+   - Variación porcentual entre períodos comparados
+   - Qué factores explican el resultado (volumen de clientes, ticket promedio, etc.)
+   - Una conclusión ejecutiva de 1-2 oraciones con tono directo de negocio
+
+   ✅ Ejemplo correcto:
+   "Según los resultados: enero 2026 creció un 23,6% vs enero 2025, impulsado por un
+   aumento de 31 clientes activos (+4,3%) y un ticket promedio mayor. Febrero también
+   creció un 10,8%. En conjunto, el acumulado enero-febrero 2026 supera en $91,9M al
+   mismo período del año anterior — un crecimiento del 17,9%."
 
 ════ PROHIBICIÓN ABSOLUTA — DATOS INVENTADOS Y GRÁFICOS FALSOS ════
 ❌ NUNCA incluyas tablas con números, montos, porcentajes o cantidades en tu texto de respuesta.
@@ -882,11 +896,11 @@ export class QueryService {
   private readonly MODEL_SMART  = process.env.CLAUDE_MODEL_SMART  ?? 'claude-sonnet-4-5';
 
   private selectModel(question: string, moduleCount: number): string {
-    // Use Sonnet ONLY for genuinely complex multi-dimensional analysis.
-    // Everything else uses Haiku (3-5x faster, same SQL quality for standard queries).
+    // Sonnet for: multi-module, comparative analysis, conclusions, trends, forecasts.
+    // Haiku for everything else (3-5x faster, same SQL quality for standard queries).
     const needsSonnet =
       moduleCount >= 3 ||
-      /\bversus\b|año\s+a\s+año|tendencia\s+\d|proyecci|forecas|correlaci/i.test(question);
+      /\bvs\b|\bversus\b|año\s+a\s+año|tendencia|proyecci|forecas|correlaci|crecimient|conclusi|analiz|compara|evoluci|variaci|rendimient|mejor\s+mes|peor\s+mes|por\s+qu[eé]|qu[eé]\s+explica/i.test(question);
     return needsSonnet ? this.MODEL_SMART : this.MODEL_FAST;
   }
 

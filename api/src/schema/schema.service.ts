@@ -251,6 +251,182 @@ const REAL_SQL_TABLES: Record<string, Array<{ name: string; description: string;
       ],
     },
   ],
+
+  // ── CON — Contabilidad ────────────────────────────────────────────────────
+  // Schema completo verificado por equipo Informat (Verónica, Bernardo) 2026-04-01
+  // Tablas maestras compartidas incluidas: PLACUED, ARENEG, CENCOS, ITEGAS, FLUEFE, EJERCIC*
+  CON: [
+    {
+      name: 'ARENEG',
+      description: 'Áreas de negocio — clasificación de cuentas y movimientos por área',
+      attributes: [
+        { id: 'r_arecod', name: 'AreCod', title: 'Código área de negocio (PK)',     type: 'n',      length:  2, dec: 0, prefix: 'CON' },
+        { id: 'r_arenom', name: 'AreNom', title: 'Nombre área de negocio',          type: 'string', length: 30, dec: 0, prefix: 'CON' },
+        { id: 'r_areest', name: 'AreEst', title: 'Estado: 0=Activo, 1=Inactivo',   type: 'n',      length:  1, dec: 0, prefix: 'CON' },
+      ],
+    },
+    {
+      name: 'CONSCE',
+      description: 'Secciones de centros de costo — agrupación de centros de costo',
+      attributes: [
+        { id: 'r_consecod', name: 'ConSeCod', title: 'Código sección C.Costo (PK)', type: 'n',      length:  2, dec: 0, prefix: 'CON' },
+        { id: 'r_consenom', name: 'ConSeNom', title: 'Nombre sección C.Costo',      type: 'string', length: 30, dec: 0, prefix: 'CON' },
+      ],
+    },
+    {
+      name: 'CONSCI',
+      description: 'Secciones de conceptos de gasto e ingreso — agrupación de ítems de gasto',
+      attributes: [
+        { id: 'r_consicod', name: 'ConSiCod', title: 'Código sección concepto (PK)', type: 'n',      length:  2, dec: 0, prefix: 'CON' },
+        { id: 'r_consinom', name: 'ConSiNom', title: 'Nombre sección concepto',      type: 'string', length: 30, dec: 0, prefix: 'CON' },
+      ],
+    },
+    {
+      name: 'CENCOS',
+      description: 'Centros de costo — unidades de análisis de costos e ingresos',
+      attributes: [
+        { id: 'r_cencod',    name: 'CenCod',    title: 'Código centro de costo (PK)',                                             type: 'n',      length:  5, dec: 0, prefix: 'CON' },
+        { id: 'r_cennom',    name: 'CenNom',    title: 'Nombre centro de costo',                                                  type: 'string', length: 30, dec: 0, prefix: 'CON' },
+        { id: 'r_centit',    name: 'CenTit',    title: 'Es título (agrupador): 0=No, 1=Sí',                                      type: 'n',      length:  1, dec: 0, prefix: 'CON' },
+        { id: 'r_consecod2', name: 'ConSeCod',  title: 'FK sección C.Costo',                                                     type: 'n',      length:  2, dec: 0, prefix: 'CON' },
+        { id: 'r_cenprvred', name: 'CenPrvRed', title: 'Código C.Costo para Previred (remuneraciones)',                          type: 'string', length: 20, dec: 0, prefix: 'CON' },
+        { id: 'r_cenest',    name: 'cenest',    title: 'Estado: 0=Activo, 1=Inactivo',                                           type: 'n',      length:  1, dec: 0, prefix: 'CON' },
+        { id: 'r_cencla',    name: 'CenCla',    title: 'Clasificación activo fijo: 0=Sin, 1=Costo Directo, 2=Indirecto, 3=Gasto',type: 'n',      length:  1, dec: 0, prefix: 'CON' },
+      ],
+    },
+    {
+      name: 'ITEGAS',
+      description: 'Conceptos de gasto e ingreso — ítems analíticos para imputación contable',
+      attributes: [
+        { id: 'r_itecod',    name: 'IteCod',    title: 'Código concepto gasto/ingreso (PK)', type: 'n',      length:  4, dec: 0, prefix: 'CON' },
+        { id: 'r_itenom',    name: 'IteNom',    title: 'Nombre concepto',                    type: 'string', length: 30, dec: 0, prefix: 'CON' },
+        { id: 'r_itetit',    name: 'IteTit',    title: 'Es título agrupador: 0=No, 1=Sí',   type: 'n',      length:  1, dec: 0, prefix: 'CON' },
+        { id: 'r_consicod2', name: 'ConSiCod',  title: 'FK sección conceptos',               type: 'n',      length:  2, dec: 0, prefix: 'CON' },
+        { id: 'r_iteest',    name: 'iteest',    title: 'Estado: 0=Activo, 1=Inactivo',       type: 'n',      length:  1, dec: 0, prefix: 'CON' },
+      ],
+    },
+    {
+      name: 'FLUEFE',
+      description: 'Flujos de efectivo — clasificación para estado de flujo de caja',
+      attributes: [
+        { id: 'r_flutip', name: 'FluTip', title: 'Tipo flujo: 0=Sin flujo, 1=Operación, 2=Inversión, 3=Financiamiento', type: 'n',      length:  1, dec: 0, prefix: 'CON' },
+        { id: 'r_flucod', name: 'FluCod', title: 'Código flujo de efectivo (PK)',                                        type: 'n',      length:  2, dec: 0, prefix: 'CON' },
+        { id: 'r_flunom', name: 'FluNom', title: 'Descripción flujo de efectivo',                                        type: 'string', length: 30, dec: 0, prefix: 'CON' },
+      ],
+    },
+    {
+      name: 'EJERCIC2',
+      description: 'Ejercicios contables — catálogo maestro de ejercicios',
+      attributes: [
+        { id: 'r_ejecod2', name: 'EjeCod', title: 'Código ejercicio (PK)', type: 'n',      length:  2, dec: 0, prefix: 'CON' },
+        { id: 'r_ejenom2', name: 'EjeNom', title: 'Nombre ejercicio',      type: 'string', length: 30, dec: 0, prefix: 'CON' },
+      ],
+    },
+    {
+      name: 'EJERCICI',
+      description: 'Ejercicios contables por año — asociación ejercicio/año con cuenta de resultado',
+      attributes: [
+        { id: 'r_ejecod',   name: 'EjeCod',   title: 'Código ejercicio (PK)',                              type: 'n',      length:  2, dec: 0, prefix: 'CON' },
+        { id: 'r_ejeano',   name: 'EjeAno',   title: 'Año del ejercicio (PK)',                             type: 'n',      length:  4, dec: 0, prefix: 'CON' },
+        { id: 'r_ejeracod', name: 'EjeRaCod', title: 'Código cuenta resultado de ejercicios anteriores',  type: 'string', length:  9, dec: 0, prefix: 'CON' },
+      ],
+    },
+    {
+      name: 'EJERCIC1',
+      description: 'Períodos contables por ejercicio — define las fechas de apertura y cierre de cada mes',
+      attributes: [
+        { id: 'r_ejecod1',   name: 'EjeCod',    title: 'Código ejercicio (PK)',                     type: 'n',      length:  2, dec: 0, prefix: 'CON' },
+        { id: 'r_ejeano1',   name: 'EjeAno',    title: 'Año del ejercicio (PK)',                    type: 'n',      length:  4, dec: 0, prefix: 'CON' },
+        { id: 'r_ejeper',    name: 'EjePer',    title: 'Período / mes (1 a 12) (PK)',               type: 'n',      length:  2, dec: 0, prefix: 'CON' },
+        { id: 'r_ejeini',    name: 'EjeIni',    title: 'Fecha desde del período',                   type: 'd',      length:  8, dec: 0, prefix: 'CON' },
+        { id: 'r_ejefin',    name: 'EjeFin',    title: 'Fecha hasta del período',                   type: 'd',      length:  8, dec: 0, prefix: 'CON' },
+        { id: 'r_ejepernom', name: 'EjePerNom', title: 'Nombre del período (ej. Enero)',            type: 'string', length: 10, dec: 0, prefix: 'CON' },
+        { id: 'r_ejecbcod',  name: 'EjeCbCod',  title: 'Código cuenta cierre de balance',          type: 'string', length:  9, dec: 0, prefix: 'CON' },
+      ],
+    },
+    {
+      name: 'PLACUED',
+      description: 'Plan de cuentas contable — maestro completo de cuentas con clasificación y controles',
+      attributes: [
+        { id: 'r_placod',      name: 'PlaCod',      title: 'Código de cuenta (PK)',                                                    type: 'string', length:  9, dec: 0, prefix: 'CON' },
+        { id: 'r_planom',      name: 'PlaNom',      title: 'Nombre de la cuenta',                                                      type: 'string', length: 30, dec: 0, prefix: 'CON' },
+        { id: 'r_placodmas',   name: 'PlaCodMas',   title: 'Código de cuenta con máscara (formato visual)',                            type: 'string', length: 18, dec: 0, prefix: 'CON' },
+        { id: 'r_plapad',      name: 'PlaPad',      title: 'Código cuenta padre (jerarquía)',                                          type: 'string', length:  9, dec: 0, prefix: 'CON' },
+        { id: 'r_plagru',      name: 'PlaGru',      title: 'Agrupación: 1=Activo, 2=Pasivo, 3=Orden Debe, 4=Orden Haber, 5=Gasto, 6=Ingreso', type: 'n', length: 1, dec: 0, prefix: 'CON' },
+        { id: 'r_platit',      name: 'PlaTit',      title: 'Indicador cuenta título (agrupador): 0=No, 1=Sí',                         type: 'n',      length:  1, dec: 0, prefix: 'CON' },
+        { id: 'r_plactacte',   name: 'PlaCtaCte',   title: 'Imputa cuenta corriente: 0=No, 1=Sí',                                     type: 'n',      length:  1, dec: 0, prefix: 'CON' },
+        { id: 'r_plaareeng',   name: 'PlaAreNeg',   title: 'Imputa área de negocio: 0=No, 1=Sí',                                      type: 'n',      length:  1, dec: 0, prefix: 'CON' },
+        { id: 'r_placencos',   name: 'PlaCenCos',   title: 'Imputa centro de costo: 0=No, 1=Sí',                                      type: 'n',      length:  1, dec: 0, prefix: 'CON' },
+        { id: 'r_plaitgas',    name: 'PlaIteGas',   title: 'Imputa concepto gasto/ingreso: 0=No, 1=Sí',                               type: 'n',      length:  1, dec: 0, prefix: 'CON' },
+        { id: 'r_pladocref',   name: 'PlaDocRef',   title: 'Imputa documento referencial: 0=No, 1=Sí',                                type: 'n',      length:  1, dec: 0, prefix: 'CON' },
+        { id: 'r_plafluefe',   name: 'PlaFluEfe',   title: 'Imputa flujo de efectivo: 0=No, 1=Sí',                                    type: 'n',      length:  1, dec: 0, prefix: 'CON' },
+        { id: 'r_plaflucaj',   name: 'PlaFluCaj',   title: 'Se considera en informe flujo de caja: 0=No, 1=Sí',                       type: 'n',      length:  1, dec: 0, prefix: 'CON' },
+        { id: 'r_placueblo',   name: 'PlaCueBlo',   title: 'Cuenta bloqueada: 0=No, 1=Sí',                                            type: 'n',      length:  1, dec: 0, prefix: 'CON' },
+        { id: 'r_plafchblo',   name: 'PlaFchBlo',   title: 'Fecha desde cuando está bloqueada',                                       type: 'd',      length:  8, dec: 0, prefix: 'CON' },
+        { id: 'r_plaotrmod',   name: 'PlaOtrMod',   title: 'Uso exclusivo (no imputable desde contabilidad): 0=No, 1=Sí',             type: 'n',      length:  1, dec: 0, prefix: 'CON' },
+        { id: 'r_plausorut',   name: 'PlaUsoRut',   title: 'Usa RUT en análisis: 0=No, 1=Sí',                                        type: 'n',      length:  1, dec: 0, prefix: 'CON' },
+        { id: 'r_plactares',   name: 'PlaCtaRes',   title: 'Código contracuenta diferencias de cambio',                               type: 'string', length:  9, dec: 0, prefix: 'CON' },
+        { id: 'r_placormon',   name: 'PlaCorMon',   title: 'Corrección monetaria diferencias de cambio: 0=No, 1=Sí',                  type: 'n',      length:  1, dec: 0, prefix: 'CON' },
+        { id: 'r_placorres',   name: 'PlaCorRes',   title: 'Corrección monetaria ctas de resultado: 0=No, 1=Sí',                      type: 'n',      length:  1, dec: 0, prefix: 'CON' },
+        { id: 'r_moncod',      name: 'MonCod',      title: 'Código de moneda de la cuenta',                                           type: 'n',      length:  2, dec: 0, prefix: 'CON' },
+        { id: 'r_placlicod',   name: 'PLACLICOD',   title: 'Imputa cliente: 0=No, 1=Sí',                                             type: 'n',      length:  1, dec: 0, prefix: 'CON' },
+        { id: 'r_plapardif',   name: 'PlaParDif',   title: 'Participa en proceso diferencia de cambio (tributario): 0=Participa, 1=No Participa', type: 'n', length: 1, dec: 0, prefix: 'CON' },
+        { id: 'r_placodsii',   name: 'PlaCodSII',   title: 'Código cuenta SII para clasificación tributaria',                         type: 'string', length: 20, dec: 0, prefix: 'CON' },
+        { id: 'r_pladifcam',   name: 'PLADIFCAM',   title: 'Participa en proceso diferencia de cambio (financiero): 0=Participa, 1=No Participa', type: 'n', length: 1, dec: 0, prefix: 'CON' },
+        { id: 'r_plabalcod',   name: 'PlaBalCod',   title: 'Código presentación adicional balances',                                  type: 'string', length: 10, dec: 0, prefix: 'CON' },
+        { id: 'r_placodf22',   name: 'PlaCodF22',   title: 'Código cuenta recuadro F22 (SII)',                                        type: 'n',      length:  4, dec: 0, prefix: 'CON' },
+        { id: 'r_plaoperac',   name: 'PlaOPeRac',   title: 'Operación en EBITDA: 0=Resta, 1=Suma',                                    type: 'n',      length:  1, dec: 0, prefix: 'CON' },
+        { id: 'r_placuedis',   name: 'placuedis',   title: 'Cuenta de distribución EBITDA: 0=No, 1=Sí',                              type: 'n',      length:  1, dec: 0, prefix: 'CON' },
+        { id: 'r_plaebitda',   name: 'PlaEbiTda',   title: 'Cuenta para EBITDA: 0=No, 1=Sí',                                         type: 'n',      length:  1, dec: 0, prefix: 'CON' },
+        { id: 'r_placueven',   name: 'PLACUEVEN',   title: 'Identificación cuenta de ventas: 0=No, 1=Sí',                            type: 'n',      length:  1, dec: 0, prefix: 'CON' },
+        { id: 'r_cccchepro',   name: 'CccChePro',   title: 'Es cuenta de cheques protestados: 0=No, 1=Sí',                           type: 'n',      length:  1, dec: 0, prefix: 'CON' },
+        { id: 'r_placuenom',   name: 'PlaCueNom',   title: 'Se usa en generación de nóminas de egresos: 0=No, 1=Sí',                 type: 'n',      length:  1, dec: 0, prefix: 'CON' },
+        { id: 'r_ccccuerec',   name: 'CCCCueRec',   title: 'Indicador cuenta recaudable: 0=No, 1=Sí',                                type: 'n',      length:  1, dec: 0, prefix: 'CON' },
+        { id: 'r_cccnomrec',   name: 'CCCNomRec',   title: 'Nombre recaudación',                                                      type: 'string', length: 20, dec: 0, prefix: 'CON' },
+        { id: 'r_plamonkor',   name: 'PlaMonCor',   title: 'Moneda a corregir diferencias de cambio: 0=Moneda Local, 1=Otra moneda',  type: 'n',      length:  1, dec: 0, prefix: 'CON' },
+      ],
+    },
+    {
+      name: 'CONCOM',
+      description: 'Cabecera del comprobante / asiento contable',
+      attributes: [
+        { id: 'r_concmglo',  name: 'ConCmGlo',  title: 'Glosa del comprobante',                  type: 'string', length: 80, dec: 0, prefix: 'CON' },
+        { id: 'r_concmtip',  name: 'ConCmTip',  title: 'Tipo de comprobante',                    type: 'string', length:  3, dec: 0, prefix: 'CON' },
+        { id: 'r_concmfcre', name: 'ConCmFCre', title: 'Fecha de creación del asiento',          type: 'd',      length:  8, dec: 0, prefix: 'CON' },
+        { id: 'r_concmsit',  name: 'ConCmSit',  title: 'Situación: A=Activo, N=Anulado',         type: 'string', length:  1, dec: 0, prefix: 'CON' },
+        { id: 'r_conlibano', name: 'ConLibAno', title: 'Año del libro contable',                 type: 'n',      length:  4, dec: 0, prefix: 'CON' },
+        { id: 'r_conlibcor', name: 'ConLibCor', title: 'Correlativo / número del comprobante',   type: 'n',      length: 10, dec: 0, prefix: 'CON' },
+      ],
+    },
+    {
+      name: 'CONCOC',
+      description: 'Líneas del asiento contable (movimientos debe/haber)',
+      attributes: [
+        { id: 'r_cocglosa',  name: 'ConCmGlo',  title: 'FK glosa/ID del comprobante padre',      type: 'string', length: 80, dec: 0, prefix: 'CON' },
+        { id: 'r_cocplacod', name: 'PlaCod',    title: 'FK cuenta del plan de cuentas',          type: 'string', length:  9, dec: 0, prefix: 'CON' },
+        { id: 'r_conccsen',  name: 'ConCcSen',  title: 'Sentido: D=Debe, H=Haber',              type: 'string', length:  1, dec: 0, prefix: 'CON' },
+        { id: 'r_conccdeb',  name: 'ConCcPDeb', title: 'Monto al Debe (pesos CLP)',              type: 'n',      length: 15, dec: 2, prefix: 'CON' },
+        { id: 'r_conccphab', name: 'ConCcPHab', title: 'Monto al Haber (pesos CLP)',             type: 'n',      length: 15, dec: 2, prefix: 'CON' },
+      ],
+    },
+    {
+      name: 'CONCOMCO',
+      description: 'Correlativo de comprobantes contables por año y tipo',
+      attributes: [
+        { id: 'r_conlibano2', name: 'ConLibAno', title: 'Año del correlativo',         type: 'n',      length:  4, dec: 0, prefix: 'CON' },
+        { id: 'r_conlibtip',  name: 'ConLibTip', title: 'Tipo de libro/comprobante',   type: 'string', length:  3, dec: 0, prefix: 'CON' },
+        { id: 'r_conlibcor2', name: 'ConLibCor', title: 'Último correlativo asignado', type: 'n',      length: 10, dec: 0, prefix: 'CON' },
+      ],
+    },
+    {
+      name: 'CONPAR1',
+      description: 'Parámetros del período contable en proceso',
+      attributes: [
+        { id: 'r_conmespro', name: 'ConMesPro', title: 'Mes en proceso (1-12)', type: 'n', length: 2, dec: 0, prefix: 'CON' },
+        { id: 'r_conanopro', name: 'ConAnoPro', title: 'Año en proceso (YYYY)', type: 'n', length: 4, dec: 0, prefix: 'CON' },
+      ],
+    },
+  ],
 };
 
 @Injectable()
