@@ -5,7 +5,7 @@ import { motion } from "framer-motion";
 import {
   Users, Shield, ChevronRight, Sparkles,
   UserCheck, UserX, Mail, ArrowLeft,
-  Database, Layers, Activity, TrendingUp,
+  Database, Layers, Activity,
 } from "lucide-react";
 import { useChatStore } from "@/store/chat";
 import { listUsers } from "@/lib/api";
@@ -29,16 +29,6 @@ export default function AdminPage() {
   const pending  = users.filter((u) => u.inviteToken).length;
   const inactive = users.filter((u) => !u.isActive).length;
   const total    = users.length;
-
-  // Module distribution: count how many users have access to each module
-  const moduleStats = ERP_MODULES.map((mod) => {
-    const count = users.filter((u) =>
-      (u.modulePermissions ?? []).some((mp) => mp.modulePrefix === mod.prefix && mp.enabled)
-    ).length;
-    return { ...mod, userCount: count, pct: total > 0 ? Math.round((count / total) * 100) : 0 };
-  })
-    .sort((a, b) => b.userCount - a.userCount)
-    .slice(0, 10); // top 10 modules by user count
 
   // System totals
   const totalTables = ERP_MODULES.reduce((s, m) => s + m.tableCount, 0);
@@ -132,91 +122,72 @@ export default function AdminPage() {
           </div>
         </section>
 
-        {/* ── Module distribution chart ────────────────────────────────── */}
-        <section>
-          <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-            <TrendingUp className="w-3.5 h-3.5" />
-            Módulos por cobertura de tablas
-          </h2>
-          <motion.div
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.25 }}
-            className="card p-5"
-          >
-            <p className="text-[11px] text-slate-400 mb-4">
-              Los 10 módulos con más tablas disponibles en la KB de tu ERP.
-            </p>
-            <div className="space-y-2.5">
-              {moduleStats.map((mod) => {
-                // bar width proportional to tableCount vs max
-                const maxTables = Math.max(...ERP_MODULES.map((m) => m.tableCount));
-                const barPct = Math.round((mod.tableCount / maxTables) * 100);
-                return (
-                  <div key={mod.prefix} className="flex items-center gap-3">
-                    {/* Module name */}
-                    <div className="w-28 text-xs text-slate-600 dark:text-slate-300 font-medium truncate flex-shrink-0">
-                      {mod.name}
-                    </div>
-                    {/* Bar */}
-                    <div className="flex-1 bg-slate-100 dark:bg-slate-800 rounded-full h-2 overflow-hidden">
-                      <motion.div
-                        initial={{ width: 0 }}
-                        animate={{ width: `${barPct}%` }}
-                        transition={{ duration: 0.6, ease: "easeOut", delay: 0.3 }}
-                        className="h-full rounded-full"
-                        style={{ backgroundColor: mod.color }}
-                      />
-                    </div>
-                    {/* Count */}
-                    <div className="w-16 text-right flex-shrink-0">
-                      <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">
-                        {mod.tableCount}
+        {/* ── Users list ──────────────────────────────────────────────── */}
+        {!loading && users.length > 0 && (
+          <section>
+            <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">
+              Usuarios del sistema
+            </h2>
+            <motion.div
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.25 }}
+              className="card overflow-hidden"
+            >
+              <div className="divide-y divide-slate-50 dark:divide-slate-800">
+                {users.slice(0, 8).map((u, i) => {
+                  const isPending  = !!u.inviteToken;
+                  const isInactive = !u.isActive;
+                  return (
+                    <motion.div
+                      key={u.id}
+                      initial={{ opacity: 0, x: -8 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: 0.28 + i * 0.04 }}
+                      className="flex items-center gap-3 px-5 py-3.5"
+                    >
+                      {/* Avatar */}
+                      <div className="w-8 h-8 rounded-full flex items-center justify-center
+                                      text-xs font-bold text-white flex-shrink-0"
+                           style={{ backgroundColor: "#0F1E35" }}>
+                        {u.name?.charAt(0)?.toUpperCase() ?? u.email.charAt(0).toUpperCase()}
+                      </div>
+                      {/* Info */}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-semibold text-slate-800 dark:text-slate-100 truncate">
+                          {u.name ?? u.email}
+                        </p>
+                        <p className="text-[10px] text-slate-400 truncate">{u.email}</p>
+                      </div>
+                      {/* Módulos */}
+                      <span className="text-[10px] text-slate-400 hidden sm:block flex-shrink-0">
+                        {(u.modulePermissions ?? []).filter(m => m.enabled).length} módulos
                       </span>
-                      <span className="text-[10px] text-slate-400 ml-1">tablas</span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </motion.div>
-        </section>
-
-        {/* ── All modules grid ─────────────────────────────────────────── */}
-        <section>
-          <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">
-            Todos los módulos ({ERP_MODULES.length})
-          </h2>
-          <motion.div
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.3 }}
-            className="card p-5"
-          >
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-              {ERP_MODULES.map((mod) => (
-                <div
-                  key={mod.prefix}
-                  className="flex items-center gap-2.5 px-3 py-2 rounded-xl
-                             bg-slate-50 dark:bg-slate-800/50"
-                >
-                  <div
-                    className="w-2 h-2 rounded-full flex-shrink-0"
-                    style={{ backgroundColor: mod.color }}
-                  />
-                  <div className="min-w-0">
-                    <p className="text-xs font-medium text-slate-700 dark:text-slate-200 truncate">
-                      {mod.name}
-                    </p>
-                    <p className="text-[10px] text-slate-400">
-                      {mod.prefix} · {mod.tableCount}t · {mod.attributeCount.toLocaleString("es-CL")}a
-                    </p>
-                  </div>
+                      {/* Estado */}
+                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0 ${
+                        isPending  ? "bg-amber-50 text-amber-600 dark:bg-amber-500/10" :
+                        isInactive ? "bg-slate-100 text-slate-400 dark:bg-slate-800" :
+                                     "bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10"
+                      }`}>
+                        {isPending ? "Pendiente" : isInactive ? "Inactivo" : "Activo"}
+                      </span>
+                    </motion.div>
+                  );
+                })}
+              </div>
+              {users.length > 8 && (
+                <div className="px-5 py-3 border-t border-slate-50 dark:border-slate-800">
+                  <button
+                    onClick={() => router.push("/admin/users")}
+                    className="text-[11px] text-brand-blue hover:underline font-medium"
+                  >
+                    Ver los {users.length - 8} usuarios restantes →
+                  </button>
                 </div>
-              ))}
-            </div>
-          </motion.div>
-        </section>
+              )}
+            </motion.div>
+          </section>
+        )}
 
         {/* ── Quick actions ────────────────────────────────────────────── */}
         <section>
