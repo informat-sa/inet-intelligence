@@ -10,7 +10,9 @@ const config: Config = {
     extend: {
       colors: {
         brand: {
-          navy:     "#1B3A5C",
+          navy:     "#0F1E35",
+          "navy-2": "#162840",
+          "navy-3": "#1E3A54",
           blue:     "#2E75B6",
           light:    "#D5E8F0",
           mid:      "#AED6F1",
@@ -18,6 +20,14 @@ const config: Config = {
         surface: {
           DEFAULT: "#F8FAFC",
           dark:    "#0F172A",
+        },
+        sidebar: {
+          bg:      "#0F1E35",
+          hover:   "rgba(255,255,255,0.06)",
+          active:  "rgba(255,255,255,0.10)",
+          border:  "rgba(255,255,255,0.07)",
+          text:    "rgba(255,255,255,0.75)",
+          muted:   "rgba(255,255,255,0.40)",
         }
       },
       fontFamily: {
