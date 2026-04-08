@@ -61,11 +61,14 @@
            transition-all duration-200;
   }
   .message-user {
-    @apply bg-brand-blue text-white rounded-2xl rounded-br-md px-5 py-3.5 max-w-[80%] shadow-sm;
+    @apply text-white rounded-2xl px-5 py-3.5 max-w-[80%];
+    background-color: #0F1E35;
+    box-shadow: 0 2px 8px rgba(15,30,53,0.18);
   }
   .message-ai {
-    @apply bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700
-           rounded-2xl rounded-bl-md px-5 py-3.5 max-w-[90%] shadow-card;
+    @apply bg-white dark:bg-slate-800/80 border border-slate-100/80 dark:border-slate-700/60
+           rounded-2xl px-5 py-3.5 max-w-[90%];
+    box-shadow: 0 1px 4px rgba(15,30,53,0.06), 0 4px 16px rgba(15,30,53,0.04);
   }
   .module-badge {
     @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold
@@ -114,7 +117,9 @@
 
 /* Typing indicator */
 .typing-dot {
-  @apply w-2 h-2 rounded-full bg-brand-blue/60 animate-bounce;
+  @apply w-1.5 h-1.5 rounded-full animate-bounce;
+  background-color: #0F1E35;
+  opacity: 0.4;
 }
 .typing-dot:nth-child(2) { animation-delay: 0.15s; }
 .typing-dot:nth-child(3) { animation-delay: 0.3s; }
@@ -124,7 +129,8 @@
 .streaming-cursor::after {
   content: "▌";
   animation: blink 1s step-end infinite;
-  @apply text-brand-blue ml-0.5;
+  color: #0F1E35;
+  @apply ml-0.5 opacity-40;
 }
 
 /* ── Mobile: dynamic viewport height ──────────────────────────────────────
