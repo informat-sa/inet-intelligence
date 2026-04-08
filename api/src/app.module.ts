@@ -24,6 +24,8 @@ import { ConversationsModule }   from './conversations/conversations.module';
 import { MailModule }      from './mail/mail.module';
 import { JwtAuthGuard }    from './auth/guards/jwt-auth.guard';
 
+import { ScheduleModule }   from '@nestjs/schedule';
+import { BcentralModule }   from './bcentral/bcentral.module';
 import { SchemaService }    from './schema/schema.service';
 import { SchemaController } from './schema/schema.controller';
 import { DatabaseService }  from './database/database.service';
@@ -78,6 +80,8 @@ const pgImports = HAS_PG
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    ScheduleModule.forRoot(),
+    BcentralModule,
     ThrottlerModule.forRoot([
       // General: 60 requests per minute per user (all endpoints)
       { name: 'default', ttl: 60_000, limit: 60 },

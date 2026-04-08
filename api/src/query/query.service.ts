@@ -3,6 +3,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { SchemaService } from '../schema/schema.service';
 import { DatabaseService, TenantConnectionInfo } from '../database/database.service';
 import { TenantsService } from '../tenants/tenants.service';
+import { BcentralService } from '../bcentral/bcentral.service';
 import { validateAndSanitizeSQL } from './sql-validator';
 import { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import type { MessageStreamEvent } from '@anthropic-ai/sdk/resources/messages';
@@ -55,17 +56,20 @@ export interface KpiResponse {
 }
 
 // Build system prompt dynamically so Claude always knows the real current date
-function buildSystemPrompt(): string {
+function buildSystemPrompt(parametrosLegales?: string): string {
   const now   = new Date();
   const yyyy  = now.getFullYear();
   const mm    = String(now.getMonth() + 1).padStart(2, '0');
   const dd    = String(now.getDate()).padStart(2, '0');
   const yyyymm     = `${yyyy}${mm}`;
   const yyyymmdd   = `${yyyy}${mm}${dd}`;
+  const bloqueParametros = parametrosLegales
+    ? `\n\n════ PARÁMETROS ECONÓMICOS VIGENTES ════\n${parametrosLegales}\nUsa estos valores cuando el usuario pregunte sobre montos en UF, USD, UTM, o reajustes.\n`
+    : '';
 
   return `Eres I-NET Intelligence, asistente de análisis de datos para I-NET ERP de Informat (Chile).
 Tu tarea es responder preguntas de negocio en español generando SQL T-SQL para SQL Server.
-
+${bloqueParametros}
 ════ FECHA ACTUAL (usa estos valores exactos) ════
   Hoy        : ${yyyy}-${mm}-${dd}
   Mes actual : '${yyyymm}'   (formato YYYYMM usado en INET)
@@ -518,6 +522,7 @@ export class QueryService {
     private readonly schemaService: SchemaService,
     private readonly databaseService: DatabaseService,
     @Optional() private readonly tenantsService: TenantsService,
+    @Optional() private readonly bcentralService: BcentralService,
   ) {
     this.anthropic = new Anthropic({
       apiKey: process.env.ANTHROPIC_API_KEY ?? '',
@@ -799,7 +804,7 @@ export class QueryService {
         max_tokens: 1200,
         system: [{
           type: 'text',
-          text: buildSystemPrompt(),   // dynamic: injects today's real date
+          text: buildSystemPrompt(this.bcentralService?.getResumenParaAI()),
           cache_control: { type: 'ephemeral' },
         }] as any,
         messages: [
