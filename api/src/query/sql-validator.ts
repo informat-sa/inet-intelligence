@@ -4,8 +4,9 @@
  */
 
 const BLOCKED_PATTERNS = [
-  /\b(INSERT|UPDATE|DELETE|TRUNCATE|DROP|CREATE|ALTER|EXEC|EXECUTE|SP_|XP_|MERGE|BULK)\b/i,
+  /\b(INSERT|UPDATE|DELETE|TRUNCATE|DROP|CREATE|ALTER|EXEC|EXECUTE|MERGE|BULK)\b/i,
   /\b(GRANT|REVOKE|DENY|USE|BACKUP|RESTORE)\b/i,
+  /\b(SP_|XP_)\w+/i,  // stored-proc prefixes: must match SP_xxx or XP_xxx (word boundary + prefix + any chars)
   /--[^\r\n]*/gm,           // ALL inline SQL comments (not just those with semicolons)
   /\/\*[\s\S]*?\*\//g,      // Block comments
   /;\s*(SELECT|INSERT|UPDATE|DELETE)/i,  // Stacked queries
